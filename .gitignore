@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+.env
+followers.json
+follower_chats.json
+copy_trades_log.json
+fee_collection_log.json
+trade_log.json
+signal_log.json
+*.log
+.DS_Store

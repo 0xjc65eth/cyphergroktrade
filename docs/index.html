@@ -1,0 +1,1030 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CypherGrokTrade | Hackeia os Yields Enquanto os Outros Dormem</title>
+    <meta name="description" content="Bot de trading automatizado com IA. Copy trading na Hyperliquid. Chegou a hora de hackear os yields.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --neon-green: #00ff88;
+            --neon-cyan: #00f0ff;
+            --neon-purple: #a855f7;
+            --neon-pink: #ff00aa;
+            --dark-bg: #0a0a0f;
+            --card-bg: #12121a;
+            --card-border: #1e1e2e;
+            --text-primary: #e0e0e0;
+            --text-secondary: #8888aa;
+            --gradient-1: linear-gradient(135deg, #00ff88, #00f0ff);
+            --gradient-2: linear-gradient(135deg, #a855f7, #ff00aa);
+            --gradient-3: linear-gradient(135deg, #00f0ff, #a855f7);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--dark-bg);
+            color: var(--text-primary);
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        /* Animated background grid */
+        .bg-grid {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image:
+                linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* Floating particles */
+        .particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .particle {
+            position: absolute;
+            width: 2px;
+            height: 2px;
+            background: var(--neon-green);
+            border-radius: 50%;
+            animation: float-particle 15s infinite linear;
+            opacity: 0.4;
+        }
+
+        @keyframes float-particle {
+            0% { transform: translateY(100vh) translateX(0); opacity: 0; }
+            10% { opacity: 0.4; }
+            90% { opacity: 0.4; }
+            100% { transform: translateY(-10vh) translateX(100px); opacity: 0; }
+        }
+
+        /* Glitch effect */
+        @keyframes glitch {
+            0%, 100% { text-shadow: -2px 0 var(--neon-cyan), 2px 0 var(--neon-pink); }
+            25% { text-shadow: 2px 0 var(--neon-cyan), -2px 0 var(--neon-pink); }
+            50% { text-shadow: -1px 2px var(--neon-cyan), 1px -2px var(--neon-pink); }
+            75% { text-shadow: 1px -1px var(--neon-cyan), -1px 1px var(--neon-pink); }
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(0, 255, 136, 0.3); }
+            50% { box-shadow: 0 0 40px rgba(0, 255, 136, 0.6), 0 0 80px rgba(0, 255, 136, 0.2); }
+        }
+
+        @keyframes scan-line {
+            0% { top: -100%; }
+            100% { top: 100%; }
+        }
+
+        @keyframes typing {
+            from { width: 0; }
+            to { width: 100%; }
+        }
+
+        @keyframes blink-caret {
+            50% { border-color: transparent; }
+        }
+
+        @keyframes count-up {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            z-index: 1000;
+            padding: 1rem 2rem;
+            backdrop-filter: blur(20px);
+            background: rgba(10, 10, 15, 0.8);
+            border-bottom: 1px solid rgba(0, 240, 255, 0.1);
+            transition: all 0.3s ease;
+        }
+
+        nav.scrolled {
+            padding: 0.5rem 2rem;
+            background: rgba(10, 10, 15, 0.95);
+        }
+
+        .nav-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 800;
+            font-size: 1.4rem;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+
+        .logo span {
+            color: var(--neon-cyan);
+            -webkit-text-fill-color: var(--neon-cyan);
+            opacity: 0.6;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: color 0.3s;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .nav-links a:hover {
+            color: var(--neon-green);
+        }
+
+        .btn-nav {
+            background: var(--gradient-1);
+            color: #000 !important;
+            padding: 0.5rem 1.2rem;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            -webkit-text-fill-color: #000;
+        }
+
+        /* Hero Section */
+        .hero {
+            position: relative;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 6rem 2rem 4rem;
+            z-index: 1;
+        }
+
+        .hero-content {
+            max-width: 900px;
+            text-align: center;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 1rem;
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 100px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--neon-green);
+            margin-bottom: 2rem;
+            background: rgba(0, 255, 136, 0.05);
+            animation: pulse-glow 3s infinite;
+        }
+
+        .badge .dot {
+            width: 8px;
+            height: 8px;
+            background: var(--neon-green);
+            border-radius: 50%;
+            animation: pulse-glow 2s infinite;
+        }
+
+        .hero h1 {
+            font-size: clamp(2.5rem, 6vw, 4.5rem);
+            font-weight: 900;
+            line-height: 1.1;
+            margin-bottom: 0.5rem;
+            letter-spacing: -2px;
+        }
+
+        .hero h1 .gradient-text {
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero h1 .glitch-text {
+            animation: glitch 3s infinite;
+            color: #fff;
+        }
+
+        .tagline {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: clamp(1rem, 2.5vw, 1.5rem);
+            color: var(--neon-cyan);
+            margin-bottom: 1.5rem;
+            font-weight: 600;
+            opacity: 0.9;
+        }
+
+        .hero-description {
+            font-size: 1.15rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin: 0 auto 2.5rem;
+            line-height: 1.8;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn-primary {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 1rem 2.5rem;
+            background: var(--gradient-1);
+            color: #000;
+            border: none;
+            border-radius: 8px;
+            font-weight: 800;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px rgba(0, 255, 136, 0.3);
+        }
+
+        .btn-secondary {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 1rem 2.5rem;
+            background: transparent;
+            color: var(--neon-cyan);
+            border: 1px solid rgba(0, 240, 255, 0.3);
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(0, 240, 255, 0.1);
+            border-color: var(--neon-cyan);
+        }
+
+        /* Terminal display */
+        .terminal {
+            max-width: 700px;
+            margin: 3rem auto 0;
+            background: #0d0d14;
+            border-radius: 12px;
+            border: 1px solid var(--card-border);
+            overflow: hidden;
+            text-align: left;
+        }
+
+        .terminal-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: #161622;
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        .terminal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .terminal-dot.red { background: #ff5f56; }
+        .terminal-dot.yellow { background: #ffbd2e; }
+        .terminal-dot.green { background: #27c93f; }
+
+        .terminal-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-left: 8px;
+        }
+
+        .terminal-body {
+            padding: 1.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            line-height: 1.8;
+        }
+
+        .terminal-line {
+            opacity: 0;
+            animation: count-up 0.5s forwards;
+        }
+
+        .terminal-line:nth-child(1) { animation-delay: 0.5s; }
+        .terminal-line:nth-child(2) { animation-delay: 1s; }
+        .terminal-line:nth-child(3) { animation-delay: 1.5s; }
+        .terminal-line:nth-child(4) { animation-delay: 2s; }
+        .terminal-line:nth-child(5) { animation-delay: 2.5s; }
+        .terminal-line:nth-child(6) { animation-delay: 3s; }
+        .terminal-line:nth-child(7) { animation-delay: 3.5s; }
+
+        .t-green { color: var(--neon-green); }
+        .t-cyan { color: var(--neon-cyan); }
+        .t-purple { color: var(--neon-purple); }
+        .t-pink { color: var(--neon-pink); }
+        .t-dim { color: #555; }
+        .t-white { color: #fff; font-weight: 600; }
+
+        /* Stats Section */
+        .stats-section {
+            position: relative;
+            z-index: 1;
+            padding: 4rem 2rem;
+        }
+
+        .stats-grid {
+            max-width: 1000px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+        }
+
+        .stat-card {
+            text-align: center;
+            padding: 2rem 1rem;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            transition: all 0.3s;
+        }
+
+        .stat-card:hover {
+            border-color: var(--neon-green);
+            transform: translateY(-4px);
+        }
+
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2rem;
+            font-weight: 800;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+
+        /* Features Section */
+        .features {
+            position: relative;
+            z-index: 1;
+            padding: 6rem 2rem;
+        }
+
+        .section-header {
+            text-align: center;
+            max-width: 600px;
+            margin: 0 auto 4rem;
+        }
+
+        .section-tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--neon-green);
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            margin-bottom: 1rem;
+        }
+
+        .section-header h2 {
+            font-size: clamp(2rem, 4vw, 3rem);
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin-bottom: 1rem;
+        }
+
+        .section-header p {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+
+        .features-grid {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+        }
+
+        .feature-card {
+            padding: 2rem;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            transition: all 0.4s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--gradient-1);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .feature-card:hover::before {
+            opacity: 1;
+        }
+
+        .feature-card:hover {
+            border-color: rgba(0, 255, 136, 0.2);
+            transform: translateY(-4px);
+        }
+
+        .feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature-card h3 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+            color: #fff;
+        }
+
+        .feature-card p {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            line-height: 1.7;
+        }
+
+        /* How it works */
+        .how-it-works {
+            position: relative;
+            z-index: 1;
+            padding: 6rem 2rem;
+            background: linear-gradient(180deg, transparent, rgba(0, 240, 255, 0.02), transparent);
+        }
+
+        .steps {
+            max-width: 800px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        .step {
+            display: flex;
+            gap: 2rem;
+            align-items: flex-start;
+            padding: 2rem;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            transition: all 0.3s;
+        }
+
+        .step:hover {
+            border-color: var(--neon-green);
+        }
+
+        .step-number {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2rem;
+            font-weight: 800;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            min-width: 50px;
+        }
+
+        .step h3 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: #fff;
+        }
+
+        .step p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+        }
+
+        /* Pricing */
+        .pricing {
+            position: relative;
+            z-index: 1;
+            padding: 6rem 2rem;
+        }
+
+        .pricing-card {
+            max-width: 500px;
+            margin: 0 auto;
+            padding: 3rem;
+            background: var(--card-bg);
+            border: 2px solid var(--neon-green);
+            border-radius: 20px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+            animation: pulse-glow 4s infinite;
+        }
+
+        .pricing-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(0, 255, 136, 0.05), transparent);
+            animation: scan-line 3s infinite;
+        }
+
+        .pricing-badge {
+            display: inline-block;
+            padding: 0.3rem 1rem;
+            background: var(--gradient-1);
+            color: #000;
+            border-radius: 100px;
+            font-weight: 800;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 1.5rem;
+        }
+
+        .pricing-card h3 {
+            font-size: 1.5rem;
+            font-weight: 800;
+            margin-bottom: 0.5rem;
+        }
+
+        .pricing-price {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 3.5rem;
+            font-weight: 800;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin: 1rem 0;
+        }
+
+        .pricing-price span {
+            font-size: 1rem;
+            opacity: 0.7;
+        }
+
+        .pricing-desc {
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+            font-size: 0.95rem;
+        }
+
+        .pricing-features {
+            text-align: left;
+            margin-bottom: 2rem;
+        }
+
+        .pricing-features li {
+            list-style: none;
+            padding: 0.6rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.95rem;
+            color: var(--text-primary);
+        }
+
+        .pricing-features li .check {
+            color: var(--neon-green);
+            font-weight: bold;
+        }
+
+        /* CTA Section */
+        .cta-section {
+            position: relative;
+            z-index: 1;
+            padding: 6rem 2rem;
+            text-align: center;
+        }
+
+        .cta-box {
+            max-width: 700px;
+            margin: 0 auto;
+            padding: 4rem 3rem;
+            background: linear-gradient(135deg, rgba(0, 255, 136, 0.05), rgba(0, 240, 255, 0.05));
+            border: 1px solid rgba(0, 255, 136, 0.2);
+            border-radius: 20px;
+        }
+
+        .cta-box h2 {
+            font-size: 2.5rem;
+            font-weight: 900;
+            margin-bottom: 1rem;
+            letter-spacing: -1px;
+        }
+
+        .cta-box p {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+        }
+
+        /* Footer */
+        footer {
+            position: relative;
+            z-index: 1;
+            padding: 3rem 2rem;
+            border-top: 1px solid var(--card-border);
+            text-align: center;
+        }
+
+        footer p {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .footer-warning {
+            color: #666;
+            font-size: 0.7rem;
+            margin-top: 1rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+            .nav-links {
+                display: none;
+            }
+            .step {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            .hero-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--dark-bg);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--neon-green);
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Background Grid -->
+<div class="bg-grid"></div>
+
+<!-- Floating Particles -->
+<div class="particles" id="particles"></div>
+
+<!-- Navigation -->
+<nav id="navbar">
+    <div class="nav-inner">
+        <div class="logo">CYPHER<span>//</span>GROK</div>
+        <div class="nav-links">
+            <a href="#features">Features</a>
+            <a href="#how">Como Funciona</a>
+            <a href="#pricing">Pricing</a>
+            <a href="https://t.me/CypherGrokTradeBot" class="btn-nav">Entrar Agora</a>
+        </div>
+    </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+    <div class="hero-content">
+        <div class="badge">
+            <span class="dot"></span>
+            SISTEMA ATIVO 24/7
+        </div>
+
+        <h1>
+            <span class="glitch-text">O Cypher Chegou.</span><br>
+            <span class="gradient-text">Hora de Hackear os Yields</span><br>
+            <span style="font-size: 0.6em; color: var(--text-secondary);">Enquanto os Outros Dormem.</span>
+        </h1>
+
+        <p class="tagline">> copy_trading.init() // automated alpha extraction</p>
+
+        <p class="hero-description">
+            Bot de trading automatizado com IA avancada (Grok + SMC Strategy).
+            Copie trades em tempo real na Hyperliquid. Zero esforco. Lucros 24/7.
+        </p>
+
+        <div class="hero-buttons">
+            <a href="https://t.me/CypherGrokTradeBot" class="btn-primary">
+                Comecar a Copiar
+            </a>
+            <a href="#how" class="btn-secondary">
+                Como Funciona
+            </a>
+        </div>
+
+        <!-- Terminal -->
+        <div class="terminal">
+            <div class="terminal-header">
+                <div class="terminal-dot red"></div>
+                <div class="terminal-dot yellow"></div>
+                <div class="terminal-dot green"></div>
+                <span class="terminal-title">cypher@grok:~$ bot.py start money</span>
+            </div>
+            <div class="terminal-body">
+                <div class="terminal-line"><span class="t-cyan">[INIT]</span> <span class="t-white">CypherGrokTrade v3 - PREMIUM SMC</span></div>
+                <div class="terminal-line"><span class="t-cyan">[INIT]</span> Leverage: <span class="t-green">20x</span> | Scanning top 30 coins</div>
+                <div class="terminal-line"><span class="t-purple">[GROK]</span> AI Sentiment: <span class="t-green">BULLISH</span> (conf: 0.87)</div>
+                <div class="terminal-line"><span class="t-cyan">[SCAN]</span> BTC 15m:<span class="t-green">LONG</span> | 5m:<span class="t-green">LONG</span> | SMC:<span class="t-green">LONG(0.82)</span></div>
+                <div class="terminal-line"><span class="t-green">[EXECUTE]</span> <span class="t-white">LONG BTC</span> | $542.00 | Conf: 0.85 | SL: 1.2% | TP: 3.5%</div>
+                <div class="terminal-line"><span class="t-green">[COPY]</span> 12 followers synced in <span class="t-cyan">0.3s</span></div>
+                <div class="terminal-line"><span class="t-green">[WIN]</span> BTC <span class="t-green">+$18.97</span> <span class="t-dim">// another one</span></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Stats -->
+<section class="stats-section">
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-value">24/7</div>
+            <div class="stat-label">Trading Non-Stop</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">30+</div>
+            <div class="stat-label">Pares Monitorados</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">15s</div>
+            <div class="stat-label">Sync de Trades</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">AI</div>
+            <div class="stat-label">Grok + SMC Engine</div>
+        </div>
+    </div>
+</section>
+
+<!-- Features -->
+<section class="features" id="features">
+    <div class="section-header">
+        <div class="section-tag">// ARSENAL</div>
+        <h2>Tecnologia de Ponta</h2>
+        <p>Stack completa de trading automatizado com inteligencia artificial</p>
+    </div>
+
+    <div class="features-grid">
+        <div class="feature-card">
+            <div class="feature-icon">🧠</div>
+            <h3>Grok AI Engine</h3>
+            <p>Cada trade confirmado pela IA Grok. Analisa sentimento, contexto macro e confluencia tecnica antes de executar.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon">📊</div>
+            <h3>SMC Strategy</h3>
+            <p>Smart Money Concepts: Order Blocks, Fair Value Gaps, Break of Structure, Liquidity Sweeps. O mesmo que os institucionais usam.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon">⚡</div>
+            <h3>Copy em Tempo Real</h3>
+            <p>Trades espelhados em ate 15 segundos. Abriu posicao? Todos os followers abrem junto automaticamente.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon">📈</div>
+            <h3>Multi-Timeframe</h3>
+            <p>Analise em 1m, 5m e 15m simultaneamente. So entra quando todas as timeframes concordam na direcao.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon">🛡️</div>
+            <h3>Risk Management</h3>
+            <p>Stop Loss e Take Profit dinamicos baseados em ATR. Cooldown automatico apos losses consecutivos.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon">💰</div>
+            <h3>Market Making</h3>
+            <p>Quando nao ha sinais de futures, o bot faz market making automaticamente. Sempre gerando receita.</p>
+        </div>
+    </div>
+</section>
+
+<!-- How it Works -->
+<section class="how-it-works" id="how">
+    <div class="section-header">
+        <div class="section-tag">// SETUP</div>
+        <h2>Comece em 2 Minutos</h2>
+        <p>Sem instalacao. Sem configuracao. Copie e lucre.</p>
+    </div>
+
+    <div class="steps">
+        <div class="step">
+            <div class="step-number">01</div>
+            <div>
+                <h3>Crie sua conta na Hyperliquid</h3>
+                <p>Acesse app.hyperliquid.xyz e crie sua conta. Deposite USDC (qualquer valor).</p>
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-number">02</div>
+            <div>
+                <h3>Exporte sua Private Key</h3>
+                <p>Na Hyperliquid, va em Settings e exporte sua API Private Key. Essa chave permite o bot operar na sua conta.</p>
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-number">03</div>
+            <div>
+                <h3>Conecte no Telegram</h3>
+                <p>Abra nosso bot no Telegram e envie: <code style="background: #1a1a2e; padding: 2px 8px; border-radius: 4px; color: var(--neon-green);">/follow SeuNome SuaKey</code></p>
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-number">04</div>
+            <div>
+                <h3>Lucre no Automatico</h3>
+                <p>Pronto! Todos os trades sao copiados automaticamente. Acompanhe seus resultados com <code style="background: #1a1a2e; padding: 2px 8px; border-radius: 4px; color: var(--neon-cyan);">/my_status</code></p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Pricing -->
+<section class="pricing" id="pricing">
+    <div class="section-header">
+        <div class="section-tag">// ACCESS</div>
+        <h2>Simples e Transparente</h2>
+        <p>Sem mensalidade. Sem taxa de entrada. So performance.</p>
+    </div>
+
+    <div class="pricing-card">
+        <div class="pricing-badge">Copy Trading</div>
+        <h3>Performance-Based</h3>
+        <div class="pricing-price">24%<span> do lucro</span></div>
+        <p class="pricing-desc">So paga quando lucra. Sem lucro = sem custo.</p>
+
+        <ul class="pricing-features">
+            <li><span class="check">&#10003;</span> Copy trading em tempo real (15s sync)</li>
+            <li><span class="check">&#10003;</span> IA Grok confirmando cada trade</li>
+            <li><span class="check">&#10003;</span> SMC + Multi-Timeframe Analysis</li>
+            <li><span class="check">&#10003;</span> Market Making como fallback</li>
+            <li><span class="check">&#10003;</span> Risk management automatico</li>
+            <li><span class="check">&#10003;</span> Controle total via Telegram</li>
+            <li><span class="check">&#10003;</span> Pause/resume quando quiser</li>
+            <li><span class="check">&#10003;</span> Sem lock-in. Saia quando quiser.</li>
+        </ul>
+
+        <a href="https://t.me/CypherGrokTradeBot" class="btn-primary" style="width: 100%; justify-content: center;">
+            Comecar Agora
+        </a>
+    </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+    <div class="cta-box">
+        <h2>Hora de <span style="background: var(--gradient-1); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Hackear</span> os Yields</h2>
+        <p>Enquanto voce dorme, o CypherGrok esta operando. 24 horas. 7 dias. Sem pausa.</p>
+        <a href="https://t.me/CypherGrokTradeBot" class="btn-primary">
+            Entrar no Telegram
+        </a>
+    </div>
+</section>
+
+<!-- Footer -->
+<footer>
+    <p>CYPHER//GROK TRADE &copy; 2025 | Built with AI</p>
+    <p class="footer-warning">
+        Trading envolve riscos. Resultados passados nao garantem resultados futuros.
+        Invista apenas o que pode perder. Nao e conselho financeiro.
+    </p>
+</footer>
+
+<script>
+    // Create floating particles
+    const particlesContainer = document.getElementById('particles');
+    for (let i = 0; i < 50; i++) {
+        const particle = document.createElement('div');
+        particle.className = 'particle';
+        particle.style.left = Math.random() * 100 + '%';
+        particle.style.animationDuration = 10 + Math.random() * 20 + 's';
+        particle.style.animationDelay = Math.random() * 10 + 's';
+        particle.style.background = ['#00ff88', '#00f0ff', '#a855f7'][Math.floor(Math.random() * 3)];
+        particlesContainer.appendChild(particle);
+    }
+
+    // Navbar scroll effect
+    window.addEventListener('scroll', () => {
+        const nav = document.getElementById('navbar');
+        if (window.scrollY > 50) {
+            nav.classList.add('scrolled');
+        } else {
+            nav.classList.remove('scrolled');
+        }
+    });
+
+    // Smooth scroll for anchor links
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function(e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+    });
+
+    // Intersection Observer for animations
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.style.opacity = '1';
+                entry.target.style.transform = 'translateY(0)';
+            }
+        });
+    }, { threshold: 0.1 });
+
+    document.querySelectorAll('.feature-card, .step, .stat-card').forEach(el => {
+        el.style.opacity = '0';
+        el.style.transform = 'translateY(30px)';
+        el.style.transition = 'all 0.6s ease';
+        observer.observe(el);
+    });
+</script>
+
+</body>
+</html>
