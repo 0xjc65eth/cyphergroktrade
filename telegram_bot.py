@@ -12,6 +12,9 @@ import threading
 from datetime import datetime
 import config
 
+SIGNATURE = "\n\n`0xjc65.btc` — *CEO Cypher*"
+DIVIDER = "━━━━━━━━━━━━━━━━━━━━━━━━"
+
 
 class TelegramNotifier:
     def __init__(self):
@@ -24,12 +27,20 @@ class TelegramNotifier:
 
         if self.enabled:
             self._send(
-                "🤖 *CypherGrokTrade v3 - ONLINE*\n"
-                f"💰 Balance: ${getattr(config, 'INITIAL_CAPITAL', 0):.2f}\n"
-                f"🎯 Target: ${getattr(config, 'TARGET_CAPITAL', 0):.2f}\n"
-                f"⚡ Leverage: {getattr(config, 'LEVERAGE', 0)}x\n"
-                f"📊 Scanning top {getattr(config, 'TOP_COINS_COUNT', 0)} coins\n"
-                "━━━━━━━━━━━━━━━━━━━━"
+                f"*CYPHER GROK TRADE v3*\n"
+                f"{DIVIDER}\n"
+                f"\n"
+                f"*System Online*\n"
+                f"\n"
+                f"  Capital:    `${getattr(config, 'INITIAL_CAPITAL', 0):.2f}`\n"
+                f"  Target:     `${getattr(config, 'TARGET_CAPITAL', 0):.2f}`\n"
+                f"  Leverage:   `{getattr(config, 'LEVERAGE', 0)}x`\n"
+                f"  Scan Pool:  `{getattr(config, 'TOP_COINS_COUNT', 0)} assets`\n"
+                f"\n"
+                f"{DIVIDER}\n"
+                f"Modules: SMC | MA Scalper | MM | Arb LP\n"
+                f"Status: *ARMED*"
+                f"{SIGNATURE}"
             )
         else:
             print("[TELEGRAM] Disabled - set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in config.py")
@@ -60,51 +71,64 @@ class TelegramNotifier:
                      smc_details: str, ma_details: str,
                      trend_5m: str, grok_reason: str):
         """Notify when a trade signal is found and about to execute."""
-        emoji = "🟢" if direction == "LONG" else "🔴"
-        arrow = "📈" if direction == "LONG" else "📉"
+        side_label = "LONG" if direction == "LONG" else "SHORT"
+        side_icon = "+" if direction == "LONG" else "-"
 
         sl_price = price * (1 - sl_pct) if direction == "LONG" else price * (1 + sl_pct)
         tp_price = price * (1 + tp_pct) if direction == "LONG" else price * (1 - tp_pct)
         rr = tp_pct / sl_pct if sl_pct > 0 else 0
 
         msg = (
-            f"{emoji} *SIGNAL: {direction} {coin}* {arrow}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💲 Entry: `${price:.4f}`\n"
-            f"🛑 SL: `${sl_price:.4f}` ({sl_pct*100:.2f}%)\n"
-            f"🎯 TP: `${tp_price:.4f}` ({tp_pct*100:.2f}%)\n"
-            f"📊 R:R = 1:{rr:.1f}\n"
-            f"🔥 Confidence: {confidence:.0%}\n"
-            f"📉 5m Trend: {trend_5m}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🧠 *SMC:* {smc_details[:100]}\n"
-            f"📊 *MA:* {ma_details[:100]}\n"
-            f"🤖 *Grok:* {grok_reason[:80]}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+            f"*NEW SIGNAL — {side_label} {coin}*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  Entry:       `${price:.4f}`\n"
+            f"  Stop Loss:   `${sl_price:.4f}`  ({sl_pct*100:.2f}%)\n"
+            f"  Take Profit: `${tp_price:.4f}`  ({tp_pct*100:.2f}%)\n"
+            f"  Risk/Reward: `1:{rr:.1f}`\n"
+            f"  Confidence:  `{confidence:.0%}`\n"
+            f"  5m Trend:    `{trend_5m}`\n"
+            f"\n"
+            f"{DIVIDER}\n"
+            f"*Analysis*\n"
+            f"  SMC: {smc_details[:100]}\n"
+            f"  MA:  {ma_details[:100]}\n"
+            f"  AI:  {grok_reason[:80]}\n"
+            f"\n"
+            f"`{datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}`"
+            f"{SIGNATURE}"
         )
         self._send(msg)
 
     def trade_opened(self, coin: str, direction: str, size_usd: float,
                      price: float, leverage: int):
         """Notify when a trade is actually opened."""
-        emoji = "✅" if direction == "LONG" else "✅"
         msg = (
-            f"{emoji} *ABRIU {direction} {coin}*\n"
-            f"💲 Preco: `${price:.4f}`\n"
-            f"💵 Size: ${size_usd:.2f} ({leverage}x)\n"
-            f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+            f"*TRADE OPENED — {direction} {coin}*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  Price:    `${price:.4f}`\n"
+            f"  Size:     `${size_usd:.2f}`\n"
+            f"  Leverage: `{leverage}x`\n"
+            f"\n"
+            f"`{datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}`"
+            f"{SIGNATURE}"
         )
         self._send(msg)
 
     def trade_closed(self, coin: str, direction: str, pnl: float, is_win: bool):
         """Notify when a trade is closed."""
-        emoji = "💰" if is_win else "💸"
-        color = "WIN" if is_win else "LOSS"
+        result = "PROFIT" if is_win else "LOSS"
         msg = (
-            f"{emoji} *{color}: {coin} {direction}*\n"
-            f"{'📈' if is_win else '📉'} PnL: `${pnl:+.4f}`\n"
-            f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+            f"*TRADE CLOSED — {result}*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  Pair:   `{coin}`\n"
+            f"  Side:   `{direction}`\n"
+            f"  PnL:    `${pnl:+.4f}`\n"
+            f"\n"
+            f"`{datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}`"
+            f"{SIGNATURE}"
         )
         self._send(msg)
 
@@ -112,78 +136,101 @@ class TelegramNotifier:
                       open_positions: list, withdrawn: float, idle_scans: int):
         """Send periodic status update (max every 5 min)."""
         now = time.time()
-        if now - self._last_status_time < 300:  # 5 min interval
+        if now - self._last_status_time < 300:
             return
         self._last_status_time = now
 
         wr = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0
-        pnl_emoji = "📈" if pnl >= 0 else "📉"
+        pnl_sign = "+" if pnl >= 0 else ""
 
         pos_text = ""
         if open_positions:
             for p in open_positions:
-                pos_emoji = "🟢" if p.get("unrealized_pnl", 0) >= 0 else "🔴"
-                pos_text += f"  {pos_emoji} {p['coin']}: ${p.get('unrealized_pnl', 0):+.4f}\n"
+                upnl = p.get("unrealized_pnl", 0)
+                sign = "+" if upnl >= 0 else ""
+                pos_text += f"  {p['coin']:>8}  `${sign}{upnl:.4f}`\n"
         else:
-            pos_text = "  Nenhuma posicao aberta\n"
+            pos_text = "  No open positions\n"
 
         msg = (
-            f"📊 *STATUS UPDATE*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 Balance: `${balance:.2f}`\n"
-            f"{pnl_emoji} PnL: `${pnl:+.2f}`\n"
-            f"🏆 Win Rate: {wr:.0f}% ({wins}W/{losses}L)\n"
-            f"💸 Withdrawn: ${withdrawn:.2f}\n"
-            f"⏳ Idle Scans: {idle_scans}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📂 *Posicoes Abertas:*\n"
+            f"*STATUS REPORT*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  Balance:    `${balance:.2f}`\n"
+            f"  PnL:        `${pnl_sign}{pnl:.2f}`\n"
+            f"  Win Rate:   `{wr:.0f}%` ({wins}W / {losses}L)\n"
+            f"  Withdrawn:  `${withdrawn:.2f}`\n"
+            f"  Idle Scans: `{idle_scans}`\n"
+            f"\n"
+            f"{DIVIDER}\n"
+            f"*Open Positions*\n"
             f"{pos_text}"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+            f"\n"
+            f"`{datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}`"
+            f"{SIGNATURE}"
         )
         self._send(msg)
 
     def scan_summary(self, total_scanned: int, signals_found: int, next_scan_seconds: int):
         """Notify scan results when no entries found."""
         if signals_found > 0:
-            return  # Only notify when idle
+            return
         now = time.time()
         if now - self._last_status_time < 300:
             return
 
         msg = (
-            f"🔍 *Scan completo*\n"
-            f"Escaneados: {total_scanned} ativos\n"
-            f"Sinais: {signals_found}\n"
-            f"⏳ Proximo scan em ~{next_scan_seconds}s\n"
-            f"📋 MM ativo como fallback"
+            f"*SCAN COMPLETE*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  Assets Scanned: `{total_scanned}`\n"
+            f"  Signals Found:  `{signals_found}`\n"
+            f"  Next Scan:      `{next_scan_seconds}s`\n"
+            f"  MM Fallback:    `Active`"
+            f"{SIGNATURE}"
         )
         self._send(msg)
 
     def withdrawal(self, amount: float, total: float):
         """Notify profit withdrawal."""
         msg = (
-            f"💸 *PROFIT WITHDRAWAL*\n"
-            f"Enviado: ${amount:.2f}\n"
-            f"Total retirado: ${total:.2f}"
+            f"*PROFIT WITHDRAWAL*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  Amount:          `${amount:.2f}`\n"
+            f"  Total Withdrawn: `${total:.2f}`"
+            f"{SIGNATURE}"
         )
         self._send(msg)
 
     def error(self, error_msg: str):
         """Notify errors."""
-        msg = f"⚠️ *ERRO:* {error_msg[:200]}"
+        msg = (
+            f"*SYSTEM ALERT*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  {error_msg[:200]}\n"
+            f"\n"
+            f"`{datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}`"
+            f"{SIGNATURE}"
+        )
         self._send(msg)
 
     def shutdown(self, balance: float, pnl: float, wins: int, losses: int, withdrawn: float):
         """Notify shutdown."""
         wr = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0
+        pnl_sign = "+" if pnl >= 0 else ""
         msg = (
-            f"🔴 *BOT DESLIGADO*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 Balance Final: ${balance:.2f}\n"
-            f"{'📈' if pnl >= 0 else '📉'} PnL: ${pnl:+.2f}\n"
-            f"🏆 Win Rate: {wr:.0f}% ({wins}W/{losses}L)\n"
-            f"💸 Total Withdrawn: ${withdrawn:.2f}"
+            f"*SYSTEM SHUTDOWN*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  Final Balance: `${balance:.2f}`\n"
+            f"  Session PnL:   `${pnl_sign}{pnl:.2f}`\n"
+            f"  Win Rate:      `{wr:.0f}%` ({wins}W / {losses}L)\n"
+            f"  Withdrawn:     `${withdrawn:.2f}`\n"
+            f"\n"
+            f"Bot terminated gracefully."
+            f"{SIGNATURE}"
         )
         self._send(msg)
 
@@ -193,23 +240,29 @@ class TelegramNotifier:
                             size_usd: float):
         """Notify when a copy trade is executed for a follower."""
         msg = (
-            f"👥 *COPY TRADE*\n"
-            f"Follower: {follower_name}\n"
-            f"{'🟢' if direction == 'LONG' else '🔴'} {direction} {coin}\n"
-            f"💵 Size: ${size_usd:.2f}"
+            f"*COPY TRADE EXECUTED*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  Follower: `{follower_name}`\n"
+            f"  Pair:     `{coin}`\n"
+            f"  Side:     `{direction}`\n"
+            f"  Size:     `${size_usd:.2f}`"
+            f"{SIGNATURE}"
         )
         self._send(msg)
 
     def new_follower(self, name: str, wallet: str, balance: float):
         """Notify when a new follower joins."""
         msg = (
-            f"🆕 *NOVO FOLLOWER!*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 Nome: {name}\n"
-            f"🔑 Wallet: `{wallet[:10]}...`\n"
-            f"💰 Balance: ${balance:.2f}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Trades serão copiados automaticamente!"
+            f"*NEW FOLLOWER JOINED*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  Name:    `{name}`\n"
+            f"  Wallet:  `{wallet[:10]}...`\n"
+            f"  Balance: `${balance:.2f}`\n"
+            f"\n"
+            f"Auto-copy enabled."
+            f"{SIGNATURE}"
         )
         self._send(msg)
 
@@ -223,25 +276,31 @@ class TelegramNotifier:
 
         follower_lines = ""
         for f in followers:
-            status = "🟢" if f["active"] else "🔴"
-            pnl_emoji = "📈" if f["pnl_since_join"] >= 0 else "📉"
+            status = "ON" if f["active"] else "OFF"
+            pnl_sign = "+" if f["pnl_since_join"] >= 0 else ""
             follower_lines += (
-                f"  {status} *{f['name']}* | ${f['balance']:.2f} | "
-                f"{pnl_emoji} ${f['pnl_since_join']:+.2f} | "
-                f"{f['positions']} pos | {f['multiplier']}x\n"
+                f"  [{status}] *{f['name']}*\n"
+                f"       Bal: `${f['balance']:.2f}` | "
+                f"PnL: `${pnl_sign}{f['pnl_since_join']:.2f}` | "
+                f"Pos: `{f['positions']}` | "
+                f"Mult: `{f['multiplier']}x`\n"
             )
 
         if not follower_lines:
-            follower_lines = "  Nenhum follower ainda\n"
+            follower_lines = "  No followers yet.\n"
 
         msg = (
-            f"👥 *COPY TRADING STATUS*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 Followers: {stats['active_followers']}/{stats['total_followers']}\n"
-            f"💰 Total Balance: ${stats['total_follower_balance']:.2f}\n"
-            f"📊 Total Trades Copied: {stats['total_trades_copied']}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"*COPY TRADING REPORT*\n"
+            f"{DIVIDER}\n"
+            f"\n"
+            f"  Active Followers: `{stats['active_followers']}/{stats['total_followers']}`\n"
+            f"  Total AUM:        `${stats['total_follower_balance']:.2f}`\n"
+            f"  Trades Copied:    `{stats['total_trades_copied']}`\n"
+            f"\n"
+            f"{DIVIDER}\n"
+            f"*Followers*\n"
             f"{follower_lines}"
+            f"{SIGNATURE}"
         )
         self._send(msg)
 
@@ -296,11 +355,10 @@ class TelegramNotifier:
                 if cmd_lower in public_cmds:
                     self._handle_public_command(text, chat_id, user_name)
                 elif chat_id == self.chat_id:
-                    # Private commands - only master
                     self._handle_command(text)
 
-        except Exception as e:
-            pass  # Silent fail on poll errors
+        except Exception:
+            pass
 
     def _handle_public_command(self, text: str, chat_id: str, user_name: str):
         """Handle commands from ANY user (public commands for followers)."""
@@ -309,32 +367,41 @@ class TelegramNotifier:
 
         if cmd == "/start" or cmd == "/join":
             self._send_to(chat_id,
-                "🤖 *CypherGrokTrade - Copy Trading*\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "Copie trades automaticamente!\n\n"
-                "*Para começar:*\n"
-                "1️⃣ Crie conta na Hyperliquid\n"
-                "2️⃣ Deposite USDC\n"
-                "3️⃣ Exporte sua Private Key\n"
-                "4️⃣ Envie aqui:\n"
-                "`/follow SeuNome SuaPrivateKey`\n\n"
-                "*Comandos:*\n"
-                "/follow `nome` `key` - Começar a copiar\n"
-                "/my\\_status - Ver seu status\n"
-                "/stop\\_copy - Parar de copiar\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "⚡ Trades copiados em tempo real!"
+                f"*CYPHER GROK TRADE — Copy Trading*\n"
+                f"{DIVIDER}\n"
+                f"\n"
+                f"Mirror trades automatically from our\n"
+                f"SMC + AI powered strategy.\n"
+                f"\n"
+                f"*Getting Started:*\n"
+                f"  1. Create a Hyperliquid account\n"
+                f"  2. Deposit USDC\n"
+                f"  3. Export your Private Key\n"
+                f"  4. Send here:\n"
+                f"     `/follow YourName YourPrivateKey`\n"
+                f"\n"
+                f"{DIVIDER}\n"
+                f"*Commands*\n"
+                f"  /follow `name` `key` — Start copying\n"
+                f"  /my\\_status — View your positions\n"
+                f"  /stop\\_copy — Stop copying\n"
+                f"\n"
+                f"Allocation: 50% LP | 25% Scalp | 25% MM"
+                f"{SIGNATURE}"
             )
 
-        elif cmd == "/follow" or cmd == "/add_follower" or cmd == "/addfollower":
+        elif cmd in ("/follow", "/add_follower", "/addfollower"):
             if len(parts) < 3:
                 self._send_to(chat_id,
-                    "❌ *Uso:* `/follow SeuNome SuaPrivateKey`\n\n"
-                    "Exemplo:\n"
-                    "`/follow João 0xSuaPrivateKey123...`\n\n"
-                    "Opcional - multiplicador de risco:\n"
-                    "`/follow João 0xKey 0.5` (metade do risco)\n"
-                    "`/follow João 0xKey 2.0` (dobro do risco)"
+                    f"*Usage:* `/follow YourName YourPrivateKey`\n"
+                    f"\n"
+                    f"Example:\n"
+                    f"  `/follow John 0xYourPrivateKey123...`\n"
+                    f"\n"
+                    f"Optional risk multiplier:\n"
+                    f"  `/follow John 0xKey 0.5` (half risk)\n"
+                    f"  `/follow John 0xKey 2.0` (double risk)"
+                    f"{SIGNATURE}"
                 )
                 return
 
@@ -343,87 +410,126 @@ class TelegramNotifier:
             mult = float(parts[3]) if len(parts) > 3 else 1.0
 
             if not self.copy_manager:
-                self._send_to(chat_id, "⚠️ Sistema de copy trading não está ativo no momento.")
+                self._send_to(chat_id,
+                    f"*System Unavailable*\n"
+                    f"Copy trading is not active at the moment."
+                    f"{SIGNATURE}"
+                )
                 return
 
             result = self.copy_manager.add_follower(name, key, multiplier=mult)
 
             if result.get("success"):
-                # Notify the follower
                 self._send_to(chat_id,
-                    f"✅ *Bem-vindo, {name}!*\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"💰 Seu balance: ${result['balance']:.2f}\n"
-                    f"📊 Multiplicador: {mult}x\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"Suas trades estão sendo copiadas automaticamente!\n\n"
-                    f"Comandos:\n"
-                    f"/my\\_status - Ver suas posições\n"
-                    f"/stop\\_copy - Parar de copiar"
+                    f"*Welcome, {name}!*\n"
+                    f"{DIVIDER}\n"
+                    f"\n"
+                    f"  Balance:    `${result['balance']:.2f}`\n"
+                    f"  Multiplier: `{mult}x`\n"
+                    f"  Status:     `Active`\n"
+                    f"\n"
+                    f"Your trades are now being copied\n"
+                    f"automatically in real-time.\n"
+                    f"\n"
+                    f"*Commands:*\n"
+                    f"  /my\\_status — View your positions\n"
+                    f"  /stop\\_copy — Stop copying"
+                    f"{SIGNATURE}"
                 )
-                # Notify YOU (the master) - privately
                 self._send(
-                    f"🆕 *NOVO FOLLOWER!*\n"
-                    f"👤 {name} | 💰 ${result['balance']:.2f} | "
-                    f"📊 {mult}x | Chat: {chat_id}"
+                    f"*NEW FOLLOWER JOINED*\n"
+                    f"{DIVIDER}\n"
+                    f"\n"
+                    f"  Name:    `{name}`\n"
+                    f"  Balance: `${result['balance']:.2f}`\n"
+                    f"  Mult:    `{mult}x`\n"
+                    f"  Chat:    `{chat_id}`"
+                    f"{SIGNATURE}"
                 )
-                # Save chat_id for future notifications to this follower
                 self._save_follower_chat(result["wallet"], chat_id)
             else:
-                self._send_to(chat_id, f"❌ Erro: {result.get('error', 'Desconhecido')}")
+                self._send_to(chat_id,
+                    f"*Error:* {result.get('error', 'Unknown')}"
+                    f"{SIGNATURE}"
+                )
 
-        elif cmd == "/my_status" or cmd == "/mystatus":
+        elif cmd in ("/my_status", "/mystatus"):
             if not self.copy_manager:
-                self._send_to(chat_id, "⚠️ Sistema não ativo.")
+                self._send_to(chat_id,
+                    f"*System Unavailable*"
+                    f"{SIGNATURE}"
+                )
                 return
 
-            # Find follower by chat_id
             follower_wallet = self._get_wallet_by_chat(chat_id)
             if not follower_wallet:
                 self._send_to(chat_id,
-                    "❌ Você não está registrado.\n"
-                    "Use `/follow SeuNome SuaPrivateKey` para começar."
+                    f"*Not Registered*\n"
+                    f"Use `/follow YourName YourPrivateKey` to start."
+                    f"{SIGNATURE}"
                 )
                 return
 
             followers = self.copy_manager.list_followers()
             for f in followers:
                 if f.get("full_wallet", "").lower() == follower_wallet.lower():
-                    pnl_emoji = "📈" if f["pnl_since_join"] >= 0 else "📉"
+                    pnl_sign = "+" if f["pnl_since_join"] >= 0 else ""
                     self._send_to(chat_id,
-                        f"📊 *Seu Status - {f['name']}*\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"💰 Balance: ${f['balance']:.2f}\n"
-                        f"{pnl_emoji} PnL: ${f['pnl_since_join']:+.2f}\n"
-                        f"📂 Posições: {f['positions']}\n"
-                        f"📊 Trades copiados: {f['total_trades']}\n"
-                        f"⚡ Multiplicador: {f['multiplier']}x\n"
-                        f"🟢 Status: {'Ativo' if f['active'] else 'Pausado'}"
+                        f"*YOUR STATUS — {f['name']}*\n"
+                        f"{DIVIDER}\n"
+                        f"\n"
+                        f"  Balance:    `${f['balance']:.2f}`\n"
+                        f"  PnL:        `${pnl_sign}{f['pnl_since_join']:.2f}`\n"
+                        f"  Positions:  `{f['positions']}`\n"
+                        f"  Trades:     `{f['total_trades']}`\n"
+                        f"  Multiplier: `{f['multiplier']}x`\n"
+                        f"  Status:     `{'Active' if f['active'] else 'Paused'}`"
+                        f"{SIGNATURE}"
                     )
                     return
 
-            self._send_to(chat_id, "❌ Não encontrado. Use /follow para se registrar.")
+            self._send_to(chat_id,
+                f"*Not Found*\n"
+                f"Use /follow to register."
+                f"{SIGNATURE}"
+            )
 
-        elif cmd == "/stop_copy" or cmd == "/stopcopy":
+        elif cmd in ("/stop_copy", "/stopcopy"):
             if not self.copy_manager:
-                self._send_to(chat_id, "⚠️ Sistema não ativo.")
+                self._send_to(chat_id,
+                    f"*System Unavailable*"
+                    f"{SIGNATURE}"
+                )
                 return
 
             follower_wallet = self._get_wallet_by_chat(chat_id)
             if not follower_wallet:
-                self._send_to(chat_id, "❌ Você não está registrado.")
+                self._send_to(chat_id,
+                    f"*Not Registered*"
+                    f"{SIGNATURE}"
+                )
                 return
 
             ok = self.copy_manager.toggle_follower(follower_wallet, False)
             if ok:
                 self._send_to(chat_id,
-                    "⏸ *Copy trading pausado.*\n"
-                    "Suas posições atuais continuam abertas.\n"
-                    "Use `/follow` novamente para reativar."
+                    f"*COPY TRADING PAUSED*\n"
+                    f"{DIVIDER}\n"
+                    f"\n"
+                    f"Existing positions remain open.\n"
+                    f"Use `/follow` to reactivate."
+                    f"{SIGNATURE}"
                 )
-                self._send(f"⏸ Follower {follower_wallet[:10]}... pausou o copy trading.")
+                self._send(
+                    f"*FOLLOWER PAUSED*\n"
+                    f"  Wallet: `{follower_wallet[:10]}...`"
+                    f"{SIGNATURE}"
+                )
             else:
-                self._send_to(chat_id, "❌ Erro ao pausar.")
+                self._send_to(chat_id,
+                    f"*Error pausing copy trading.*"
+                    f"{SIGNATURE}"
+                )
 
     def _save_follower_chat(self, wallet: str, chat_id: str):
         """Save mapping of wallet -> telegram chat_id."""
@@ -455,33 +561,43 @@ class TelegramNotifier:
         return ""
 
     def _handle_command(self, text: str):
-        """Handle Telegram commands."""
+        """Handle Telegram commands from master."""
         parts = text.split()
         cmd = parts[0].lower()
 
         if cmd == "/help":
             self._send(
-                "🤖 *CypherGrokTrade Commands:*\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "📊 /status - Status atual\n"
-                "👥 /followers - Lista de followers\n"
-                "➕ /add\\_follower `name` `key` `mult` - Adicionar follower\n"
-                "❌ /remove\\_follower `wallet` - Remover follower\n"
-                "⏸ /pause\\_follower `wallet` - Pausar follower\n"
-                "▶️ /resume\\_follower `wallet` - Retomar follower\n"
-                "📈 /copy\\_stats - Estatísticas copy trading\n"
-                "🔗 /join\\_link - Link para followers\n"
+                f"*CYPHER GROK TRADE — Commands*\n"
+                f"{DIVIDER}\n"
+                f"\n"
+                f"  /status          — Current status\n"
+                f"  /followers       — List followers\n"
+                f"  /copy\\_stats     — Copy trading stats\n"
+                f"  /fees            — Fee report\n"
+                f"  /collect\\_fees   — Collect pending fees\n"
+                f"  /join\\_link      — Follower onboarding\n"
+                f"\n"
+                f"{DIVIDER}\n"
+                f"*Follower Management*\n"
+                f"  /add\\_follower `name` `key` `mult`\n"
+                f"  /remove\\_follower `wallet`\n"
+                f"  /pause\\_follower `wallet`\n"
+                f"  /resume\\_follower `wallet`"
+                f"{SIGNATURE}"
             )
 
         elif cmd == "/followers":
             self.follower_stats()
 
-        elif cmd == "/copy_stats" or cmd == "/copystats":
+        elif cmd in ("/copy_stats", "/copystats"):
             self.follower_stats()
 
-        elif cmd == "/add_follower" or cmd == "/addfollower":
+        elif cmd in ("/add_follower", "/addfollower"):
             if len(parts) < 3:
-                self._send("❌ Uso: /add\\_follower `nome` `private_key` `[multiplicador]`")
+                self._send(
+                    f"*Usage:* `/add_follower name private_key [multiplier]`"
+                    f"{SIGNATURE}"
+                )
                 return
             name = parts[1]
             key = parts[2]
@@ -491,48 +607,76 @@ class TelegramNotifier:
                 if result.get("success"):
                     self.new_follower(name, result["wallet"], result["balance"])
                 else:
-                    self._send(f"❌ Erro: {result.get('error', 'Desconhecido')}")
+                    self._send(
+                        f"*Error:* {result.get('error', 'Unknown')}"
+                        f"{SIGNATURE}"
+                    )
 
-        elif cmd == "/remove_follower" or cmd == "/removefollower":
+        elif cmd in ("/remove_follower", "/removefollower"):
             if len(parts) < 2:
-                self._send("❌ Uso: /remove\\_follower `wallet_address`")
+                self._send(
+                    f"*Usage:* `/remove_follower wallet_address`"
+                    f"{SIGNATURE}"
+                )
                 return
             if self.copy_manager:
                 removed = self.copy_manager.remove_follower(parts[1])
-                self._send("✅ Follower removido" if removed else "❌ Não encontrado")
+                self._send(
+                    f"{'*Follower removed.*' if removed else '*Not found.*'}"
+                    f"{SIGNATURE}"
+                )
 
-        elif cmd == "/pause_follower" or cmd == "/pausefollower":
+        elif cmd in ("/pause_follower", "/pausefollower"):
             if len(parts) < 2:
-                self._send("❌ Uso: /pause\\_follower `wallet_address`")
+                self._send(
+                    f"*Usage:* `/pause_follower wallet_address`"
+                    f"{SIGNATURE}"
+                )
                 return
             if self.copy_manager:
                 ok = self.copy_manager.toggle_follower(parts[1], False)
-                self._send("⏸ Follower pausado" if ok else "❌ Não encontrado")
+                self._send(
+                    f"{'*Follower paused.*' if ok else '*Not found.*'}"
+                    f"{SIGNATURE}"
+                )
 
-        elif cmd == "/resume_follower" or cmd == "/resumefollower":
+        elif cmd in ("/resume_follower", "/resumefollower"):
             if len(parts) < 2:
-                self._send("❌ Uso: /resume\\_follower `wallet_address`")
+                self._send(
+                    f"*Usage:* `/resume_follower wallet_address`"
+                    f"{SIGNATURE}"
+                )
                 return
             if self.copy_manager:
                 ok = self.copy_manager.toggle_follower(parts[1], True)
-                self._send("▶️ Follower retomado" if ok else "❌ Não encontrado")
+                self._send(
+                    f"{'*Follower resumed.*' if ok else '*Not found.*'}"
+                    f"{SIGNATURE}"
+                )
 
-        elif cmd == "/join_link" or cmd == "/joinlink":
+        elif cmd in ("/join_link", "/joinlink"):
             self._send(
-                "🔗 *Como seguir o CypherGrokTrade:*\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "1️⃣ Crie conta na Hyperliquid\n"
-                "2️⃣ Deposite USDC\n"
-                "3️⃣ Exporte sua Private Key\n"
-                "4️⃣ Envie aqui:\n"
-                "`/add_follower SeuNome SuaPrivateKey 1.0`\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "O multiplicador (1.0) define o % do capital:\n"
-                "• 1.0 = mesmo % que o master\n"
-                "• 0.5 = metade do risco\n"
-                "• 2.0 = dobro do risco\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "⚠️ Trades são copiados automaticamente em tempo real!"
+                f"*CYPHER GROK TRADE — Join as Follower*\n"
+                f"{DIVIDER}\n"
+                f"\n"
+                f"*Steps:*\n"
+                f"  1. Create a Hyperliquid account\n"
+                f"  2. Deposit USDC\n"
+                f"  3. Export your Private Key\n"
+                f"  4. Send:\n"
+                f"     `/add_follower Name PrivateKey 1.0`\n"
+                f"\n"
+                f"{DIVIDER}\n"
+                f"*Multiplier Guide*\n"
+                f"  `1.0` — Same % as master\n"
+                f"  `0.5` — Half risk\n"
+                f"  `2.0` — Double risk\n"
+                f"\n"
+                f"Capital Allocation:\n"
+                f"  50% Arbitrum LP | 25% Scalp | 25% MM\n"
+                f"\n"
+                f"Trades are copied in real-time."
+                f"{SIGNATURE}"
             )
 
         elif cmd == "/fees":
@@ -544,39 +688,49 @@ class TelegramNotifier:
                 for f in followers:
                     if f.get("pending_fees", 0) > 0 or f.get("total_fees_paid", 0) > 0:
                         fee_lines += (
-                            f"  👤 *{f['name']}*: "
-                            f"pago=${f['total_fees_paid']:.2f} | "
-                            f"pendente=${f['pending_fees']:.4f}\n"
+                            f"  *{f['name']}*\n"
+                            f"    Paid: `${f['total_fees_paid']:.2f}` | "
+                            f"Pending: `${f['pending_fees']:.4f}`\n"
                         )
 
                 if not fee_lines:
-                    fee_lines = "  Nenhuma fee ainda\n"
+                    fee_lines = "  No fees collected yet.\n"
 
                 self._send(
-                    f"💰 *FEE REPORT*\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 Performance Fee: {fees['performance_fee_pct']:.0f}% do lucro\n"
-                    f"📊 Trade Fee: {fees['trade_fee_pct']:.1f}% por trade\n"
-                    f"📊 LP Copy Fee: {fees.get('lp_copy_fee_pct', 5):.0f}% da alocacao LP\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"✅ Total Coletado: `${fees['total_collected']:.2f}`\n"
-                    f"  Perf Fees: ${fees['total_performance_fees']:.2f}\n"
-                    f"  Trade Fees: ${fees['total_trade_fees']:.2f}\n"
-                    f"  LP Copy Fees: ${fees.get('total_lp_copy_fees', 0):.2f}\n"
-                    f"⏳ Pendente: `${fees['pending_uncollected']:.4f}`\n"
-                    f"📦 Coletas: {fees['num_collections']}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"*Por Follower:*\n"
+                    f"*FEE REPORT*\n"
+                    f"{DIVIDER}\n"
+                    f"\n"
+                    f"  Performance Fee: `{fees['performance_fee_pct']:.0f}%` of profit\n"
+                    f"  Trade Fee:       `{fees['trade_fee_pct']:.1f}%` per trade\n"
+                    f"  LP Copy Fee:     `{fees.get('lp_copy_fee_pct', 5):.0f}%` of LP alloc\n"
+                    f"\n"
+                    f"{DIVIDER}\n"
+                    f"*Totals*\n"
+                    f"  Collected:  `${fees['total_collected']:.2f}`\n"
+                    f"    Perf:     `${fees['total_performance_fees']:.2f}`\n"
+                    f"    Trade:    `${fees['total_trade_fees']:.2f}`\n"
+                    f"    LP Copy:  `${fees.get('total_lp_copy_fees', 0):.2f}`\n"
+                    f"  Pending:    `${fees['pending_uncollected']:.4f}`\n"
+                    f"  Collections: `{fees['num_collections']}`\n"
+                    f"\n"
+                    f"{DIVIDER}\n"
+                    f"*By Follower*\n"
                     f"{fee_lines}"
+                    f"{SIGNATURE}"
                 )
 
-        elif cmd == "/collect_fees" or cmd == "/collectfees":
+        elif cmd in ("/collect_fees", "/collectfees"):
             if self.copy_manager:
-                self._send("💸 Coletando fees pendentes...")
+                self._send(
+                    f"*Collecting pending fees...*"
+                )
                 self.copy_manager._collect_all_fees()
                 fees = self.copy_manager.fee_tracker.get_fee_stats()
                 self._send(
-                    f"✅ Coleta concluída!\n"
-                    f"Total coletado: `${fees['total_collected']:.2f}`\n"
-                    f"Pendente: `${fees['pending_uncollected']:.4f}`"
+                    f"*FEE COLLECTION COMPLETE*\n"
+                    f"{DIVIDER}\n"
+                    f"\n"
+                    f"  Total Collected: `${fees['total_collected']:.2f}`\n"
+                    f"  Remaining:       `${fees['pending_uncollected']:.4f}`"
+                    f"{SIGNATURE}"
                 )
