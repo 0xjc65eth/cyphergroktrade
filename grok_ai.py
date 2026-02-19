@@ -145,38 +145,55 @@ Respond ONLY JSON:
     def _fallback_decision(self, smc_analysis: dict, ma_analysis: dict,
                            balance: float, trend_5m: str = "NEUTRAL",
                            bias_15m: str = "NEUTRAL") -> dict:
-        """Fallback: ULTRA-STRICT consensus only."""
+        """Fallback when Grok API is unavailable.
+        The signal already passed 7 filters in bot.py before reaching here,
+        so we trust the setup if SMC+MA agree or one is strong enough."""
         smc_sig = smc_analysis["signal"]
         ma_sig = ma_analysis["signal"]
         smc_conf = smc_analysis["confidence"]
         ma_conf = ma_analysis["confidence"]
 
-        # All must agree
-        if (smc_sig == ma_sig and smc_sig in ("LONG", "SHORT") and
-            (trend_5m == smc_sig or trend_5m == "NEUTRAL") and
-            (bias_15m == smc_sig or bias_15m == "NEUTRAL")):
+        # Determine direction: use the non-neutral signal
+        if smc_sig in ("LONG", "SHORT") and ma_sig in ("LONG", "SHORT"):
+            if smc_sig != ma_sig:
+                return {"action": "SKIP", "confidence": 0, "reason": "Fallback: SMC/MA disagree"}
+            direction = smc_sig
+        elif smc_sig in ("LONG", "SHORT"):
+            direction = smc_sig
+        elif ma_sig in ("LONG", "SHORT"):
+            direction = ma_sig
+        else:
+            return {"action": "SKIP", "confidence": 0, "reason": "Fallback: no direction"}
 
-            avg_conf = (smc_conf + ma_conf) / 2
-            if avg_conf >= config.MIN_CONFIDENCE:
-                # Extra check: need OB or FVG near price
-                has_ob_fvg = False
-                for ob in smc_analysis.get("order_blocks", []):
-                    if not ob.get("mitigated"):
-                        has_ob_fvg = True
-                        break
-                for fvg in smc_analysis.get("fvgs", []):
-                    if not fvg.get("filled"):
-                        has_ob_fvg = True
-                        break
+        # 5m trend must not oppose
+        if trend_5m != "NEUTRAL" and trend_5m != direction:
+            return {"action": "SKIP", "confidence": 0, "reason": f"Fallback: 5m trend {trend_5m} opposes {direction}"}
 
-                if has_ob_fvg:
-                    return {
-                        "action": smc_sig,
-                        "confidence": avg_conf,
-                        "reason": f"Fallback: Full consensus + OB/FVG (conf={avg_conf:.2f})",
-                    }
+        # Need reasonable confidence from at least one engine
+        best_conf = max(smc_conf, ma_conf)
+        if best_conf < config.MIN_CONFIDENCE:
+            return {"action": "SKIP", "confidence": 0, "reason": f"Fallback: low conf {best_conf:.2f}"}
 
-        return {"action": "SKIP", "confidence": 0, "reason": "No premium consensus"}
+        # Need OB or FVG support
+        has_ob_fvg = False
+        for ob in smc_analysis.get("order_blocks", []):
+            if not ob.get("mitigated"):
+                has_ob_fvg = True
+                break
+        if not has_ob_fvg:
+            for fvg in smc_analysis.get("fvgs", []):
+                if not fvg.get("filled"):
+                    has_ob_fvg = True
+                    break
+
+        if not has_ob_fvg:
+            return {"action": "SKIP", "confidence": 0, "reason": "Fallback: no OB/FVG"}
+
+        return {
+            "action": direction,
+            "confidence": best_conf * 0.9,  # Slight discount vs Grok-confirmed
+            "reason": f"Fallback: {direction} conf={best_conf:.2f} (Grok offline)",
+        }
 
     def get_market_sentiment(self, coin: str) -> str:
         """Quick sentiment check from Grok."""
