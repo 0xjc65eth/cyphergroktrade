@@ -74,8 +74,21 @@ body::before {
 #clock { color: var(--neon-cyan); }
 
 /* MAIN GRID */
-.main { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; padding: 1px; position: relative; z-index: 1; height: calc(100vh - 50px); }
-@media (max-width: 900px) { .main { grid-template-columns: 1fr; } }
+.main {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    grid-template-areas:
+        "account positions positions"
+        "lp copy scan";
+    gap: 1px; padding: 1px; position: relative; z-index: 1; height: calc(100vh - 50px);
+}
+@media (max-width: 900px) { .main { grid-template-columns: 1fr; grid-template-areas: "account" "positions" "lp" "copy" "scan"; grid-template-rows: auto; } }
+.panel-account { grid-area: account; }
+.panel-positions { grid-area: positions; }
+.panel-lp { grid-area: lp; }
+.panel-copy { grid-area: copy; }
+.panel-scan { grid-area: scan; }
 
 /* PANELS */
 .panel {
@@ -173,7 +186,7 @@ body::before {
 
 <div class="main">
     <!-- TOP LEFT: ACCOUNT -->
-    <div class="panel">
+    <div class="panel panel-account">
         <div class="panel-header">
             <div class="title"><span class="dot dot-green"></span> ACCOUNT STATUS</div>
             <span class="pulse" style="color:var(--neon-green);">LIVE</span>
@@ -193,7 +206,7 @@ body::before {
     </div>
 
     <!-- TOP RIGHT: OPEN POSITIONS -->
-    <div class="panel">
+    <div class="panel panel-positions">
         <div class="panel-header">
             <div class="title"><span class="dot dot-cyan"></span> OPEN POSITIONS</div>
             <span id="posCount" style="color:var(--neon-cyan)">0</span>
@@ -208,7 +221,7 @@ body::before {
     </div>
 
     <!-- BOTTOM LEFT: LP STATUS -->
-    <div class="panel">
+    <div class="panel panel-lp">
         <div class="panel-header">
             <div class="title"><span class="dot dot-purple"></span> ARBITRUM LP</div>
             <span id="lpStatus" style="color:var(--neon-purple)">--</span>
@@ -224,8 +237,23 @@ body::before {
         </div>
     </div>
 
+    <!-- BOTTOM CENTER: COPY TRADING -->
+    <div class="panel panel-copy">
+        <div class="panel-header">
+            <div class="title"><span class="dot dot-pink" style="background:var(--neon-pink);box-shadow:0 0 6px var(--neon-pink)"></span> COPY TRADING</div>
+            <span id="copyFollowers" style="color:var(--neon-pink)">0 followers</span>
+        </div>
+        <div class="panel-body" id="copyPanel">
+            <table class="term-table">
+                <thead><tr><th>Name</th><th>Wallet</th><th>HL Bal</th><th>LP Pool</th><th>Fees</th></tr></thead>
+                <tbody id="copyTable"></tbody>
+            </table>
+            <div class="term-line dim" id="copyEmpty" style="margin-top:12px;text-align:center">No followers connected</div>
+        </div>
+    </div>
+
     <!-- BOTTOM RIGHT: SCAN LOG -->
-    <div class="panel">
+    <div class="panel panel-scan">
         <div class="panel-header">
             <div class="title"><span class="dot dot-yellow"></span> SCAN LOG</div>
             <span id="scanCount" style="color:var(--neon-yellow)">0 scans</span>
@@ -331,6 +359,31 @@ async function fetchStatus() {
             document.getElementById('lpPool').textContent = d.lp.pool || '--';
             document.getElementById('lpTokenId').textContent = d.lp.token_id ? '#' + d.lp.token_id : '--';
             document.getElementById('lpFees').textContent = d.lp.fees_collected ? '$' + d.lp.fees_collected.toFixed(4) : '$0';
+        }
+
+        // Copy Trading
+        if (d.copy) {
+            const ct = document.getElementById('copyTable');
+            const ce = document.getElementById('copyEmpty');
+            const followers = d.copy.followers || [];
+            document.getElementById('copyFollowers').textContent = followers.length + ' followers';
+            if (followers.length > 0) {
+                ce.style.display = 'none';
+                ct.innerHTML = followers.map(f => {
+                    const lpCol = f.lp ? `<span class="purple">${f.lp.pool || '?'}</span>` : '<span class="dim">--</span>';
+                    const feesCol = f.pending_fees > 0 ? `<span class="yellow">$${f.pending_fees.toFixed(2)}</span>` : '<span class="dim">$0</span>';
+                    return `<tr>
+                        <td class="pink" style="color:var(--neon-pink)">${f.name}</td>
+                        <td class="dim">${f.wallet}</td>
+                        <td class="cyan">$${f.hl_balance.toFixed(2)}</td>
+                        <td>${lpCol}</td>
+                        <td>${feesCol}</td>
+                    </tr>`;
+                }).join('');
+            } else {
+                ce.style.display = 'block';
+                ct.innerHTML = '';
+            }
         }
 
         // Scan count

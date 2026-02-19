@@ -128,21 +128,56 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "scan_interval": config.SCAN_INTERVAL,
                 }
 
-                # Arbitrum LP
+                # Arbitrum LP (master)
                 if bot.arb_lp:
                     lp = bot.arb_lp
+                    pos = lp.active_position  # singular dict or None
                     data["lp"] = {
-                        "active": bool(lp.active_positions),
-                        "pool": None,
-                        "token_id": None,
+                        "active": bool(pos),
+                        "pool": pos.get("pool", None) if pos else None,
+                        "token_id": pos.get("token_id", None) if pos else None,
                         "fees_collected": getattr(lp, "total_fees_collected", 0),
                     }
-                    if lp.active_positions:
-                        pos = list(lp.active_positions.values())[0]
-                        data["lp"]["pool"] = pos.get("symbol", "?")
-                        data["lp"]["token_id"] = pos.get("token_id", None)
                 else:
                     data["lp"] = {"active": False, "pool": None, "token_id": None, "fees_collected": 0}
+
+                # Copy Trading
+                cm = bot.copy_manager
+                data["copy"] = {
+                    "followers": [],
+                    "total_fees_collected": 0,
+                }
+                if cm:
+                    data["copy"]["total_fees_collected"] = cm.fee_tracker.fee_log.get("total_fees_collected", 0)
+                    for f in cm.followers:
+                        wallet = f.get("wallet_address", "")
+                        fname = f.get("name", "?")
+                        # Follower HL balance
+                        hl_bal = 0
+                        try:
+                            us = cm.info.user_state(wallet)
+                            hl_bal = float(us.get("marginSummary", {}).get("accountValue", 0))
+                        except:
+                            pass
+                        # Follower LP status
+                        flp = cm._follower_lp_managers.get(wallet)
+                        flp_data = None
+                        if flp and flp.active_position:
+                            fp = flp.active_position
+                            flp_data = {
+                                "pool": fp.get("pool"),
+                                "token_id": fp.get("token_id"),
+                                "fees": getattr(flp, "total_fees_collected", 0),
+                            }
+                        # Pending fees
+                        pending_fees = cm.fee_tracker.get_pending_fees(wallet)
+                        data["copy"]["followers"].append({
+                            "name": fname,
+                            "wallet": wallet[:6] + "..." + wallet[-4:] if len(wallet) > 10 else wallet,
+                            "hl_balance": round(hl_bal, 2),
+                            "lp": flp_data,
+                            "pending_fees": round(pending_fees, 4),
+                        })
 
             except Exception as e:
                 data["api_error"] = str(e)
