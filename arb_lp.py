@@ -706,6 +706,14 @@ class ArbitrumLPManager:
 
     # ─── Position Recovery ───
 
+    def _addr_to_token_name(self, addr: str) -> str | None:
+        """Reverse-lookup a token address to its name in ARB_TOKENS."""
+        addr_lower = addr.lower()
+        for name, token_addr in getattr(config, "ARB_TOKENS", {}).items():
+            if token_addr.lower() == addr_lower:
+                return name
+        return None
+
     def _recover_existing_positions(self):
         """Check for existing LP NFT positions owned by this wallet.
         Restores active_position state if a position with liquidity is found."""
@@ -727,13 +735,17 @@ class ArbitrumLPManager:
                         Web3.to_checksum_address(token1),
                         fee,
                     ).call()
+                    # Resolve token names for proper symbol
+                    t0_name = self._addr_to_token_name(token0) or "UNKNOWN"
+                    t1_name = self._addr_to_token_name(token1) or "UNKNOWN"
+                    symbol = f"{t0_name}-{t1_name}"
                     self.active_position = {
                         "token_id": token_id,
-                        "pool": {"symbol": "recovered", "apy": 0, "tvl": 0},
+                        "pool": {"symbol": symbol, "apy": 0, "tvl": 0, "fee": fee},
                         "pool_address": pool_addr,
                         "entry_time": time.time(),
                     }
-                    print(f"[ARB-LP:{self.label}] Recovered position #{token_id} (liquidity={liquidity})")
+                    print(f"[ARB-LP:{self.label}] Recovered position #{token_id} ({symbol} fee={fee}, liquidity={liquidity})")
                     return
         except Exception as e:
             print(f"[ARB-LP:{self.label}] Position recovery error: {e}")
