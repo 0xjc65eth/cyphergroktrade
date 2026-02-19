@@ -709,26 +709,53 @@ class ArbitrumLPManager:
 
     def _increase_liquidity(self) -> bool:
         """Add more liquidity to the existing position using available wallet tokens.
-        Returns True if liquidity was added."""
+        If only one token is available and the position is in-range, swaps half to
+        get the other token first. Returns True if liquidity was added."""
         pos = self.active_position
         if not pos or not pos.get("token_id"):
             return False
 
         token0 = pos.get("token0")
         token1 = pos.get("token1")
+        fee = None
         if not token0 or not token1:
-            # Try to read from on-chain position
+            # Read from on-chain position
             try:
                 on_chain = self.nft_manager.functions.positions(pos["token_id"]).call()
                 token0 = on_chain[2]
                 token1 = on_chain[3]
+                fee = on_chain[4]
                 pos["token0"] = token0
                 pos["token1"] = token1
             except Exception:
                 print(f"[ARB-LP:{self.label}] Cannot read position tokens for increase")
                 return False
 
+        # Get fee tier from position or pool info
+        if fee is None:
+            pool_info = pos.get("pool", {})
+            fee = pool_info.get("fee", 500) if isinstance(pool_info, dict) else 500
+
         token_id = pos["token_id"]
+
+        # Convert any USDC/other stablecoins to pool tokens if we have them
+        tokens = getattr(config, "ARB_TOKENS", {})
+        weth = ARBITRUM_CONTRACTS["weth"]
+        for stable_name in ("USDC", "USDC.e", "USDT"):
+            stable_addr = tokens.get(stable_name)
+            if not stable_addr or stable_addr.lower() in (token0.lower(), token1.lower()):
+                continue
+            stable_bal = self._get_token_balance(stable_addr)
+            stable_usd = self._token_value_usd(stable_addr, stable_bal)
+            if stable_usd > 0.30:
+                # Swap stablecoins to WETH (or whichever pool token is easier)
+                target = token1 if token1.lower() == weth.lower() else token0 if token0.lower() == weth.lower() else token1
+                print(f"[ARB-LP:{self.label}] Converting {stable_name} (${stable_usd:.2f}) -> pool token for LP")
+                try:
+                    self._swap_for_tokens(stable_addr, target, stable_bal, 500)
+                except Exception as e:
+                    print(f"[ARB-LP:{self.label}] Stable swap failed: {e}")
+
         bal0 = self._get_token_balance(token0)
         bal1 = self._get_token_balance(token1)
 
@@ -745,6 +772,34 @@ class ArbitrumLPManager:
             print(f"[ARB-LP:{self.label}] Skipping increase: free tokens < $0.30")
             return False
 
+        # If only one token available, swap half to get the other (needed for in-range positions)
+        has_t0 = bal0 > 0 and t0_usd > 0.05
+        has_t1 = bal1 > 0 and t1_usd > 0.05
+        if has_t0 and not has_t1:
+            swap_amount = bal0 // 2
+            print(f"[ARB-LP:{self.label}] Swapping half {t0_name} -> {t1_name} for balanced add")
+            try:
+                self._swap_for_tokens(token0, token1, swap_amount, fee)
+            except Exception as e:
+                print(f"[ARB-LP:{self.label}] Swap failed: {e}")
+                return False
+            bal0 = self._get_token_balance(token0)
+            bal1 = self._get_token_balance(token1)
+        elif has_t1 and not has_t0:
+            swap_amount = bal1 // 2
+            print(f"[ARB-LP:{self.label}] Swapping half {t1_name} -> {t0_name} for balanced add")
+            try:
+                self._swap_for_tokens(token1, token0, swap_amount, fee)
+            except Exception as e:
+                print(f"[ARB-LP:{self.label}] Swap failed: {e}")
+                return False
+            bal0 = self._get_token_balance(token0)
+            bal1 = self._get_token_balance(token1)
+
+        if bal0 == 0 and bal1 == 0:
+            print(f"[ARB-LP:{self.label}] No tokens after swap, skipping")
+            return False
+
         # Approve tokens
         nft_addr = ARBITRUM_CONTRACTS["uniswap_v3_nft_manager"]
         if bal0 > 0:
@@ -758,6 +813,8 @@ class ArbitrumLPManager:
             print(f"[ARB-LP:{self.label}] Gas too high for increase (${gas_cost:.4f} vs ${total_usd:.2f})")
             return False
 
+        t0_usd_new = self._token_value_usd(token0, bal0)
+        t1_usd_new = self._token_value_usd(token1, bal1)
         deadline = int(time.time()) + 300
         params = (
             token_id,
@@ -769,7 +826,7 @@ class ArbitrumLPManager:
         )
 
         print(f"[ARB-LP:{self.label}] Increasing liquidity on #{token_id}: "
-              f"token0=${t0_usd:.2f} token1=${t1_usd:.2f} (total +${total_usd:.2f})")
+              f"token0=${t0_usd_new:.2f} token1=${t1_usd_new:.2f} (total +${t0_usd_new + t1_usd_new:.2f})")
 
         try:
             tx_func = self.nft_manager.functions.increaseLiquidity(params)
