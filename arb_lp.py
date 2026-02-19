@@ -676,6 +676,65 @@ class ArbitrumLPManager:
 
         return token_id
 
+    def _increase_liquidity(self) -> bool:
+        """Add more liquidity to the existing position using available wallet tokens.
+        Returns True if liquidity was added."""
+        pos = self.active_position
+        if not pos or not pos.get("token_id"):
+            return False
+
+        token0 = pos.get("token0")
+        token1 = pos.get("token1")
+        if not token0 or not token1:
+            return False
+
+        token_id = pos["token_id"]
+        bal0 = self._get_token_balance(token0)
+        bal1 = self._get_token_balance(token1)
+
+        # Check minimum value
+        t0_usd = self._token_value_usd(token0, bal0)
+        t1_usd = self._token_value_usd(token1, bal1)
+        total_usd = t0_usd + t1_usd
+
+        if total_usd < 0.30:
+            return False
+
+        # Approve tokens
+        nft_addr = ARBITRUM_CONTRACTS["uniswap_v3_nft_manager"]
+        if bal0 > 0:
+            self._approve_token(token0, nft_addr, bal0)
+        if bal1 > 0:
+            self._approve_token(token1, nft_addr, bal1)
+
+        # Check gas
+        gas_cost = self._estimate_gas_cost_usd(250_000)
+        if gas_cost > total_usd * 0.20:
+            print(f"[ARB-LP:{self.label}] Gas too high for increase (${gas_cost:.4f} vs ${total_usd:.2f})")
+            return False
+
+        deadline = int(time.time()) + 300
+        params = (
+            token_id,
+            bal0,
+            bal1,
+            0,  # amount0Min
+            0,  # amount1Min
+            deadline,
+        )
+
+        print(f"[ARB-LP:{self.label}] Increasing liquidity on #{token_id}: "
+              f"token0=${t0_usd:.2f} token1=${t1_usd:.2f} (total +${total_usd:.2f})")
+
+        try:
+            tx_func = self.nft_manager.functions.increaseLiquidity(params)
+            receipt = self._send_tx(tx_func)
+            print(f"[ARB-LP:{self.label}] Liquidity increased! tx: {receipt['transactionHash'].hex()[:12]}...")
+            return True
+        except Exception as e:
+            print(f"[ARB-LP:{self.label}] Increase liquidity failed: {e}")
+            return False
+
     def _check_position(self) -> dict | None:
         """Check active position status."""
         if not self.active_position or not self.active_position.get("token_id"):
@@ -863,6 +922,8 @@ class ArbitrumLPManager:
                             "token_id": token_id,
                             "pool": {"symbol": symbol, "apy": 0, "tvl": 0, "fee": fee},
                             "pool_address": pool_addr,
+                            "token0": token0,
+                            "token1": token1,
                             "entry_time": time.time(),
                         }
                         print(f"[ARB-LP:{self.label}] Recovered position #{token_id} ({symbol} fee={fee}, liquidity={liquidity})")
@@ -927,6 +988,8 @@ class ArbitrumLPManager:
                         "token_id": token_id,
                         "pool": best,
                         "pool_address": resolved["pool_address"],
+                        "token0": resolved["token0"],
+                        "token1": resolved["token1"],
                         "entry_time": time.time(),
                     }
                     print(f"[ARB-LP:{self.label}] Position active: {best['symbol']} (APY: {best['apy']:.1f}%)")
@@ -943,6 +1006,9 @@ class ArbitrumLPManager:
             print(f"[ARB-LP:{self.label}] Position {status['token_id']}: {range_str} | "
                   f"Liquidity: {status['liquidity']} | "
                   f"Tick: {status['current_tick']} [{status['tick_lower']}, {status['tick_upper']}]")
+
+            # 3b. Auto-compound: add free tokens to existing position
+            self._increase_liquidity()
 
             # 4. Collect fees if worthwhile
             if status["tokens_owed0"] > 0 or status["tokens_owed1"] > 0:
