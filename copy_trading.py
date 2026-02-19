@@ -474,10 +474,12 @@ class CopyTradingManager:
             max_risk = follower.get("max_risk_pct", 0.10)
             max_pos = follower.get("max_positions", 10)
 
-            # Capital allocation: only use SCALP portion for perp trading
+            # Capital allocation: calculate real total and use SCALP portion
             import config as cfg
-            scalp_pct = getattr(cfg, "COPY_ALLOC_SCALP_PCT", 0.25)
-            scalp_balance = follower_balance * scalp_pct  # 25% for scalp
+            lp_manager = self._follower_lp_managers.get(follower["wallet_address"])
+            capital = self._get_follower_total_capital(follower, lp_manager)
+            scalp_balance = capital["scalp_alloc"]  # 25% of total for scalp
+            print(f"[COPY] {follower['name']}: total=${capital['total']:.2f} -> scalp=${scalp_balance:.2f}")
 
             # === CLOSE positions that master closed ===
             for coin, f_size in follower_positions.items():
@@ -664,8 +666,50 @@ class CopyTradingManager:
                 return None
         return self._follower_lp_managers[wallet]
 
+    def _get_follower_total_capital(self, follower: dict, lp_manager=None) -> dict:
+        """Get follower's total capital across HL and Arbitrum.
+        Returns dict with hl_balance, arb_balance, total, and allocations."""
+        import config as cfg
+
+        # HL balance (perps + spot)
+        hl_balance = 0.0
+        try:
+            user_state = self.info.user_state(follower["wallet_address"])
+            hl_balance = float(user_state.get("marginSummary", {}).get("accountValue", 0))
+            spot_state = self.info.spot_user_state(follower["wallet_address"])
+            for b in spot_state.get("balances", []):
+                if b["coin"] == "USDC":
+                    hl_balance += float(b.get("total", 0))
+        except:
+            pass
+
+        # Arbitrum balance
+        arb_balance = 0.0
+        if lp_manager:
+            try:
+                arb_balance = lp_manager._get_arb_total_usd()
+            except:
+                pass
+
+        total = hl_balance + arb_balance
+
+        # Allocation based on follower's real total capital
+        lp_pct = getattr(cfg, "COPY_ALLOC_LP_PCT", 0.50)
+        scalp_pct = getattr(cfg, "COPY_ALLOC_SCALP_PCT", 0.25)
+        mm_pct = getattr(cfg, "COPY_ALLOC_MM_PCT", 0.25)
+
+        return {
+            "hl_balance": hl_balance,
+            "arb_balance": arb_balance,
+            "total": total,
+            "lp_alloc": total * lp_pct,
+            "scalp_alloc": total * scalp_pct,
+            "mm_alloc": total * mm_pct,
+        }
+
     def sync_lp_all_followers(self):
-        """Mirror master's LP position to all active followers."""
+        """Mirror master's LP position to all active followers.
+        Each follower uses 50% of their TOTAL capital (HL+Arbitrum) for LP."""
         if not self._master_lp_ref or not HAS_ARB_LP:
             return
 
@@ -685,16 +729,36 @@ class CopyTradingManager:
                 if not lp:
                     continue
 
+                # Calculate follower's real capital and LP allocation
+                capital = self._get_follower_total_capital(follower, lp)
+                lp_alloc = capital["lp_alloc"]
+
+                print(f"[COPY-LP] {follower['name']}: total=${capital['total']:.2f} "
+                      f"(HL=${capital['hl_balance']:.2f} ARB=${capital['arb_balance']:.2f}) "
+                      f"-> LP alloc: ${lp_alloc:.2f}")
+
                 if master_pool and master_pool.get("has_position"):
                     # Master has LP -> follower should mirror
                     if not lp.active_position:
-                        print(f"[COPY-LP] Mirroring LP to {follower['name']}...")
+                        if capital["arb_balance"] < 0.10:
+                            print(f"[COPY-LP] {follower['name']}: no Arbitrum funds, skipping LP")
+                            continue
+
+                        # Override alloc with follower's real LP allocation
+                        # Temporarily set config value for this follower
+                        original_alloc = getattr(cfg, "ARB_LP_ALLOC_USD", 5.0)
+                        cfg.ARB_LP_ALLOC_USD = min(lp_alloc, capital["arb_balance"] * 0.85)
+
+                        print(f"[COPY-LP] Mirroring LP to {follower['name']} (alloc: ${cfg.ARB_LP_ALLOC_USD:.2f})...")
                         master_addr = self._master_lp_ref.address if self._master_lp_ref else self.master_address
                         fee_taken = lp.mirror_master_pool(master_pool, fee_recipient=master_addr)
                         if fee_taken > 0:
                             self.fee_tracker.record_lp_copy_fee(
                                 follower["wallet_address"], follower["name"], fee_taken
                             )
+
+                        # Restore master's alloc
+                        cfg.ARB_LP_ALLOC_USD = original_alloc
                     else:
                         # Follower already has position, just monitor
                         lp.run_cycle()
