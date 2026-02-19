@@ -1,13 +1,16 @@
 """
 Web wrapper for cloud deploy (Render free tier).
-Runs the trading bot in a background thread and exposes an HTTP health endpoint
-to keep the free tier service alive (prevents sleep after 15 min inactivity).
+Runs the trading bot in a background thread and exposes:
+- / → Dashboard HTML (terminal hacker UI)
+- /api/status → JSON with bot state for dashboard polling
+- /health → Plain text health check
 Also pings itself every 10 min to stay awake.
 """
 
 import os
 import sys
 import time
+import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -15,10 +18,138 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 os.environ["PYTHONUNBUFFERED"] = "1"
 
 BOT_STATUS = {"running": False, "started_at": None, "errors": 0}
+BOT_INSTANCE = None  # Reference to CypherGrokTradeBot instance
+SCAN_LOG = []        # Recent scan log lines (max 100)
+SCAN_COUNT = 0
+
+# Capture print output for scan log
+_original_print = print
+def _capturing_print(*args, **kwargs):
+    global SCAN_COUNT
+    msg = " ".join(str(a) for a in args)
+    _original_print(*args, **kwargs)
+    # Capture bot scan/trade lines
+    if any(tag in msg for tag in ["[SCAN]", "[ENTRY]", "[WIN]", "[LOSS]", "[MM]", "[ARB-LP]",
+                                   "[HOLD]", "[COOLDOWN]", "[GROK]", "[Cycle", "[COPY]"]):
+        # Strip ANSI codes
+        import re
+        clean = re.sub(r'\033\[[0-9;]*m', '', msg).strip()
+        if clean:
+            SCAN_LOG.append(clean)
+            while len(SCAN_LOG) > 100:
+                SCAN_LOG.pop(0)
+            if "[Cycle" in msg:
+                SCAN_COUNT += 1
+
+import builtins
+builtins.print = _capturing_print
 
 
-class HealthHandler(BaseHTTPRequestHandler):
+# Read dashboard HTML once
+DASHBOARD_HTML = ""
+dashboard_paths = [
+    os.path.join(os.path.dirname(__file__), "dashboard.html"),
+    "/app/dashboard.html",
+]
+for p in dashboard_paths:
+    if os.path.exists(p):
+        with open(p, "r") as f:
+            DASHBOARD_HTML = f.read()
+        break
+
+
+class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/" or self.path == "/dashboard":
+            self._serve_dashboard()
+        elif self.path == "/api/status":
+            self._serve_api()
+        elif self.path == "/health":
+            self._serve_health()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def _serve_dashboard(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(DASHBOARD_HTML.encode())
+
+    def _serve_api(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        data = {
+            "running": BOT_STATUS["running"],
+            "uptime": int(time.time() - BOT_STATUS["started_at"]) if BOT_STATUS["started_at"] else 0,
+            "errors": BOT_STATUS["errors"],
+            "scan_count": SCAN_COUNT,
+            "recent_logs": SCAN_LOG[-30:],
+        }
+
+        bot = BOT_INSTANCE
+        if bot:
+            try:
+                # Balance & PnL
+                balance = bot.executor.get_balance()
+                data["balance"] = balance
+                data["pnl"] = balance - bot.start_balance if bot.start_balance > 0 else 0
+
+                # Win rate
+                total = bot.wins + bot.losses
+                data["win_rate"] = round(bot.wins / total * 100, 1) if total > 0 else 0
+                data["wins"] = bot.wins
+                data["losses"] = bot.losses
+                data["trades_taken"] = bot.trades_taken
+
+                # Open positions
+                positions = bot.executor.get_open_positions()
+                data["open_positions"] = len(positions)
+                data["positions"] = []
+                for p in positions:
+                    data["positions"].append({
+                        "coin": p.get("coin", "?"),
+                        "side": "LONG" if p.get("size", 0) > 0 else "SHORT",
+                        "size": abs(p.get("size", 0)),
+                        "entry_price": p.get("entry_price", 0),
+                        "pnl": p.get("unrealized_pnl", 0),
+                        "leverage": p.get("leverage", 0),
+                    })
+
+                # Config summary
+                import config
+                data["config"] = {
+                    "leverage": config.LEVERAGE,
+                    "pairs_count": len(config.TRADING_PAIRS) or config.TOP_COINS_COUNT,
+                    "min_confidence": config.MIN_CONFIDENCE,
+                    "scan_interval": config.SCAN_INTERVAL,
+                }
+
+                # Arbitrum LP
+                if bot.arb_lp:
+                    lp = bot.arb_lp
+                    data["lp"] = {
+                        "active": bool(lp.active_positions),
+                        "pool": None,
+                        "token_id": None,
+                        "fees_collected": getattr(lp, "total_fees_collected", 0),
+                    }
+                    if lp.active_positions:
+                        pos = list(lp.active_positions.values())[0]
+                        data["lp"]["pool"] = pos.get("symbol", "?")
+                        data["lp"]["token_id"] = pos.get("token_id", None)
+                else:
+                    data["lp"] = {"active": False, "pool": None, "token_id": None, "fees_collected": 0}
+
+            except Exception as e:
+                data["api_error"] = str(e)
+
+        self.wfile.write(json.dumps(data).encode())
+
+    def _serve_health(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
@@ -34,6 +165,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def run_bot():
     """Run the trading bot in a thread."""
+    global BOT_INSTANCE
     try:
         # Patch sys.argv so bot.py thinks it was called with 'start money'
         sys.argv = ["bot.py", "start", "money"]
@@ -44,10 +176,11 @@ def run_bot():
         BOT_STATUS["started_at"] = time.time()
 
         bot = CypherGrokTradeBot()
+        BOT_INSTANCE = bot
         bot.start()
     except Exception as e:
         BOT_STATUS["errors"] += 1
-        print(f"[WEB-WRAPPER] Bot error: {e}")
+        _original_print(f"[WEB-WRAPPER] Bot error: {e}")
         # Restart after 30s
         time.sleep(30)
         run_bot()
@@ -65,10 +198,10 @@ def self_ping():
             url = f"https://{service}.onrender.com"
 
     if not url:
-        print("[WEB-WRAPPER] No RENDER_EXTERNAL_URL, self-ping disabled")
+        _original_print("[WEB-WRAPPER] No RENDER_EXTERNAL_URL, self-ping disabled")
         return
 
-    print(f"[WEB-WRAPPER] Self-ping enabled: {url}")
+    _original_print(f"[WEB-WRAPPER] Self-ping enabled: {url}")
     while True:
         time.sleep(600)  # 10 min
         try:
@@ -89,6 +222,6 @@ if __name__ == "__main__":
     ping_thread.start()
 
     # Start HTTP server (foreground - this is what Render monitors)
-    print(f"[WEB-WRAPPER] Health server on port {port}")
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    _original_print(f"[WEB-WRAPPER] Dashboard + API on port {port}")
+    server = HTTPServer(("0.0.0.0", port), DashboardHandler)
     server.serve_forever()

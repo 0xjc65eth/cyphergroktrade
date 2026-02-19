@@ -190,8 +190,11 @@ class CypherGrokTradeBot:
         self.banner()
         self.running = True
 
-        signal.signal(signal.SIGINT, self._shutdown)
-        signal.signal(signal.SIGTERM, self._shutdown)
+        try:
+            signal.signal(signal.SIGINT, self._shutdown)
+            signal.signal(signal.SIGTERM, self._shutdown)
+        except ValueError:
+            pass  # signal only works in main thread (cloud deploy uses threading)
 
         self.start_balance = self.executor.get_balance()
         print(f"{C.BOLD}[INIT]{C.RESET} Account Balance: {C.GREEN}${self.start_balance:.2f}{C.RESET}")

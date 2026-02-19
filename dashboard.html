@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CYPHER GROK TRADE | Terminal</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+:root {
+    --neon-green: #00ff88;
+    --neon-cyan: #00f0ff;
+    --neon-purple: #a855f7;
+    --neon-pink: #ff00aa;
+    --neon-red: #ff3333;
+    --neon-yellow: #ffdd00;
+    --dark-bg: #050508;
+    --card-bg: #0a0a12;
+    --card-border: #1a1a2a;
+    --text-primary: #c0c0c8;
+    --text-dim: #5a5a78;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--dark-bg);
+    color: var(--text-primary);
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+/* SCANLINES */
+body::after {
+    content: '';
+    position: fixed; top:0; left:0; width:100%; height:100%;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,136,0.008) 2px, rgba(0,255,136,0.008) 4px);
+    pointer-events: none; z-index: 9999;
+}
+
+/* GRID BG */
+body::before {
+    content: '';
+    position: fixed; top:0; left:0; width:100%; height:100%;
+    background-image:
+        linear-gradient(rgba(0,255,136,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.015) 1px, transparent 1px);
+    background-size: 30px 30px;
+    pointer-events: none; z-index: 0;
+}
+
+/* HEADER */
+.header {
+    border-bottom: 1px solid var(--card-border);
+    padding: 12px 20px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: relative; z-index: 1;
+    background: rgba(5,5,8,0.95);
+}
+.header-left { display: flex; align-items: center; gap: 12px; }
+.logo {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 14px; font-weight: 900;
+    background: linear-gradient(135deg, var(--neon-green), var(--neon-cyan));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    text-shadow: none;
+}
+.status-badge {
+    font-size: 10px; padding: 2px 8px;
+    border-radius: 3px; text-transform: uppercase;
+    font-weight: 700; letter-spacing: 1px;
+}
+.status-live { background: rgba(0,255,136,0.15); color: var(--neon-green); border: 1px solid rgba(0,255,136,0.3); }
+.status-offline { background: rgba(255,51,51,0.15); color: var(--neon-red); border: 1px solid rgba(255,51,51,0.3); }
+.header-right { font-size: 11px; color: var(--text-dim); }
+#clock { color: var(--neon-cyan); }
+
+/* MAIN GRID */
+.main { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; padding: 1px; position: relative; z-index: 1; height: calc(100vh - 50px); }
+@media (max-width: 900px) { .main { grid-template-columns: 1fr; } }
+
+/* PANELS */
+.panel {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+}
+.panel-header {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--card-border);
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 2px;
+    color: var(--text-dim);
+    background: rgba(10,10,18,0.8);
+    flex-shrink: 0;
+}
+.panel-header .title { display:flex; align-items:center; gap:8px; }
+.panel-header .dot { width:6px; height:6px; border-radius:50%; }
+.dot-green { background: var(--neon-green); box-shadow: 0 0 6px var(--neon-green); }
+.dot-cyan { background: var(--neon-cyan); box-shadow: 0 0 6px var(--neon-cyan); }
+.dot-purple { background: var(--neon-purple); box-shadow: 0 0 6px var(--neon-purple); }
+.dot-yellow { background: var(--neon-yellow); box-shadow: 0 0 6px var(--neon-yellow); }
+.panel-body {
+    padding: 10px 14px;
+    overflow-y: auto; flex: 1;
+    font-size: 12px; line-height: 1.7;
+}
+.panel-body::-webkit-scrollbar { width: 4px; }
+.panel-body::-webkit-scrollbar-track { background: transparent; }
+.panel-body::-webkit-scrollbar-thumb { background: var(--card-border); border-radius: 2px; }
+
+/* TERMINAL OUTPUT */
+.term-line { white-space: pre-wrap; word-break: break-all; }
+.term-line .prompt { color: var(--neon-green); }
+.term-line .cmd { color: var(--neon-cyan); }
+.term-line .val { color: var(--neon-green); }
+.term-line .warn { color: var(--neon-yellow); }
+.term-line .err { color: var(--neon-red); }
+.term-line .dim { color: var(--text-dim); }
+.term-line .purple { color: var(--neon-purple); }
+.term-line .pink { color: var(--neon-pink); }
+
+/* STATS ROW */
+.stats-row { display:flex; gap:6px; flex-wrap:wrap; margin-bottom: 8px; }
+.stat-box {
+    flex:1; min-width: 100px;
+    background: rgba(0,255,136,0.03);
+    border: 1px solid rgba(0,255,136,0.08);
+    border-radius: 4px; padding: 8px 10px;
+    text-align: center;
+}
+.stat-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+.stat-value { font-size: 16px; font-weight: 700; color: var(--neon-green); }
+.stat-value.red { color: var(--neon-red); }
+.stat-value.cyan { color: var(--neon-cyan); }
+.stat-value.purple { color: var(--neon-purple); }
+.stat-value.yellow { color: var(--neon-yellow); }
+
+/* TABLE */
+.term-table { width: 100%; font-size: 11px; border-collapse: collapse; }
+.term-table th { color: var(--text-dim); text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--card-border); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+.term-table td { padding: 4px 8px; border-bottom: 1px solid rgba(26,26,42,0.5); }
+.term-table tr:hover td { background: rgba(0,255,136,0.02); }
+.green { color: var(--neon-green); }
+.red { color: var(--neon-red); }
+.cyan { color: var(--neon-cyan); }
+
+/* TYPING CURSOR */
+@keyframes blink { 50% { opacity:0; } }
+.cursor { display:inline-block; width:8px; height:14px; background:var(--neon-green); animation: blink 1s step-end infinite; vertical-align: middle; margin-left: 2px; }
+
+/* PULSE DOT */
+@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+.pulse { animation: pulse 2s ease-in-out infinite; }
+
+/* LP POOL BAR */
+.pool-bar { height: 4px; background: var(--card-border); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.pool-bar-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--neon-green), var(--neon-cyan)); transition: width 0.5s; }
+</style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-left">
+        <span class="logo">CYPHER GROK TRADE</span>
+        <span id="statusBadge" class="status-badge status-live">LIVE</span>
+        <span style="font-size:10px;color:var(--text-dim)">v3.0</span>
+    </div>
+    <div class="header-right">
+        <span id="clock"></span> <span style="color:var(--text-dim)">|</span> <span id="uptime" style="color:var(--neon-green)">--</span>
+    </div>
+</div>
+
+<div class="main">
+    <!-- TOP LEFT: ACCOUNT -->
+    <div class="panel">
+        <div class="panel-header">
+            <div class="title"><span class="dot dot-green"></span> ACCOUNT STATUS</div>
+            <span class="pulse" style="color:var(--neon-green);">LIVE</span>
+        </div>
+        <div class="panel-body" id="accountPanel">
+            <div class="stats-row">
+                <div class="stat-box"><div class="stat-label">Balance</div><div class="stat-value" id="balance">--</div></div>
+                <div class="stat-box"><div class="stat-label">PnL</div><div class="stat-value" id="pnl">--</div></div>
+                <div class="stat-box"><div class="stat-label">Positions</div><div class="stat-value cyan" id="positions">--</div></div>
+                <div class="stat-box"><div class="stat-label">Win Rate</div><div class="stat-value purple" id="winrate">--</div></div>
+            </div>
+            <div class="term-line"><span class="prompt">$</span> <span class="cmd">cat /sys/trading/config</span></div>
+            <div class="term-line dim" id="configOutput">Loading...</div>
+            <div class="term-line" style="margin-top:8px"><span class="prompt">$</span> <span class="cmd">tail -f /var/log/trades</span><span class="cursor"></span></div>
+            <div id="tradeLog"></div>
+        </div>
+    </div>
+
+    <!-- TOP RIGHT: OPEN POSITIONS -->
+    <div class="panel">
+        <div class="panel-header">
+            <div class="title"><span class="dot dot-cyan"></span> OPEN POSITIONS</div>
+            <span id="posCount" style="color:var(--neon-cyan)">0</span>
+        </div>
+        <div class="panel-body" id="positionsPanel">
+            <table class="term-table">
+                <thead><tr><th>Coin</th><th>Side</th><th>Size</th><th>Entry</th><th>PnL</th><th>Lev</th></tr></thead>
+                <tbody id="positionsTable"></tbody>
+            </table>
+            <div class="term-line dim" id="posEmpty" style="margin-top:12px;text-align:center">Scanning for entries...</div>
+        </div>
+    </div>
+
+    <!-- BOTTOM LEFT: LP STATUS -->
+    <div class="panel">
+        <div class="panel-header">
+            <div class="title"><span class="dot dot-purple"></span> ARBITRUM LP</div>
+            <span id="lpStatus" style="color:var(--neon-purple)">--</span>
+        </div>
+        <div class="panel-body" id="lpPanel">
+            <div class="stats-row">
+                <div class="stat-box"><div class="stat-label">Pool</div><div class="stat-value cyan" id="lpPool" style="font-size:13px">--</div></div>
+                <div class="stat-box"><div class="stat-label">Token ID</div><div class="stat-value" id="lpTokenId" style="font-size:13px">--</div></div>
+                <div class="stat-box"><div class="stat-label">Fees Earned</div><div class="stat-value yellow" id="lpFees">--</div></div>
+            </div>
+            <div class="term-line"><span class="prompt">$</span> <span class="cmd">arb-lp --status</span></div>
+            <div id="lpLog"></div>
+        </div>
+    </div>
+
+    <!-- BOTTOM RIGHT: SCAN LOG -->
+    <div class="panel">
+        <div class="panel-header">
+            <div class="title"><span class="dot dot-yellow"></span> SCAN LOG</div>
+            <span id="scanCount" style="color:var(--neon-yellow)">0 scans</span>
+        </div>
+        <div class="panel-body" id="scanPanel">
+            <div class="term-line"><span class="prompt">$</span> <span class="cmd">watch -n 15 cypher-scan --all</span><span class="cursor"></span></div>
+            <div id="scanLog"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Clock
+function updateClock() {
+    const now = new Date();
+    document.getElementById('clock').textContent = now.toLocaleTimeString('en-US', {hour12:false});
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// Format uptime
+function fmtUptime(s) {
+    if (!s || s < 0) return '--';
+    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+    return `${h}h ${m}m ${sec}s`;
+}
+
+// Add log line
+function addLog(containerId, text, cls='dim') {
+    const el = document.getElementById(containerId);
+    const line = document.createElement('div');
+    line.className = 'term-line ' + cls;
+    line.textContent = text;
+    el.appendChild(line);
+    // Keep max 50 lines
+    while (el.children.length > 50) el.removeChild(el.firstChild);
+    el.scrollTop = el.scrollHeight;
+}
+
+// Fetch and update
+async function fetchStatus() {
+    try {
+        const r = await fetch('/api/status');
+        const d = await r.json();
+
+        // Status badge
+        const badge = document.getElementById('statusBadge');
+        if (d.running) {
+            badge.textContent = 'LIVE';
+            badge.className = 'status-badge status-live';
+        } else {
+            badge.textContent = 'OFFLINE';
+            badge.className = 'status-badge status-offline';
+        }
+
+        // Uptime
+        document.getElementById('uptime').textContent = 'UP ' + fmtUptime(d.uptime);
+
+        // Account stats
+        if (d.balance !== undefined) document.getElementById('balance').textContent = '$' + d.balance.toFixed(2);
+        if (d.pnl !== undefined) {
+            const pnlEl = document.getElementById('pnl');
+            pnlEl.textContent = (d.pnl >= 0 ? '+' : '') + '$' + d.pnl.toFixed(2);
+            pnlEl.className = 'stat-value ' + (d.pnl >= 0 ? '' : 'red');
+        }
+        if (d.open_positions !== undefined) document.getElementById('positions').textContent = d.open_positions;
+        if (d.win_rate !== undefined) document.getElementById('winrate').textContent = d.win_rate + '%';
+
+        // Config
+        if (d.config) {
+            document.getElementById('configOutput').innerHTML =
+                `<span class="dim">  leverage: <span class="val">${d.config.leverage}x</span> | pairs: <span class="val">${d.config.pairs_count}</span> | confidence: <span class="val">${d.config.min_confidence}</span> | scan: <span class="val">${d.config.scan_interval}s</span></span>`;
+        }
+
+        // Positions table
+        const tbody = document.getElementById('positionsTable');
+        const posEmpty = document.getElementById('posEmpty');
+        if (d.positions && d.positions.length > 0) {
+            posEmpty.style.display = 'none';
+            tbody.innerHTML = d.positions.map(p => {
+                const side = p.side || (p.size > 0 ? 'LONG' : 'SHORT');
+                const sideClass = side === 'LONG' ? 'green' : 'red';
+                const pnlClass = p.pnl >= 0 ? 'green' : 'red';
+                return `<tr>
+                    <td class="cyan">${p.coin}</td>
+                    <td class="${sideClass}">${side}</td>
+                    <td>${Math.abs(p.size).toFixed(4)}</td>
+                    <td>$${p.entry_price.toFixed(2)}</td>
+                    <td class="${pnlClass}">${p.pnl >= 0 ? '+' : ''}$${p.pnl.toFixed(2)}</td>
+                    <td>${p.leverage || '-'}x</td>
+                </tr>`;
+            }).join('');
+            document.getElementById('posCount').textContent = d.positions.length;
+        } else {
+            posEmpty.style.display = 'block';
+            tbody.innerHTML = '';
+            document.getElementById('posCount').textContent = '0';
+        }
+
+        // LP
+        if (d.lp) {
+            document.getElementById('lpStatus').textContent = d.lp.active ? 'ACTIVE' : 'IDLE';
+            document.getElementById('lpPool').textContent = d.lp.pool || '--';
+            document.getElementById('lpTokenId').textContent = d.lp.token_id ? '#' + d.lp.token_id : '--';
+            document.getElementById('lpFees').textContent = d.lp.fees_collected ? '$' + d.lp.fees_collected.toFixed(4) : '$0';
+        }
+
+        // Scan count
+        if (d.scan_count !== undefined) document.getElementById('scanCount').textContent = d.scan_count + ' scans';
+
+        // Recent logs
+        if (d.recent_logs) {
+            const scanLog = document.getElementById('scanLog');
+            scanLog.innerHTML = '';
+            d.recent_logs.forEach(log => {
+                const line = document.createElement('div');
+                line.className = 'term-line';
+                if (log.includes('SKIP') || log.includes('No ')) line.classList.add('dim');
+                else if (log.includes('LONG')) line.innerHTML = log.replace(/(LONG)/g, '<span class="green">$1</span>');
+                else if (log.includes('SHORT')) line.innerHTML = log.replace(/(SHORT)/g, '<span class="red">$1</span>');
+                else if (log.includes('ERROR') || log.includes('Error')) line.classList.add('err');
+                else line.classList.add('dim');
+                if (!line.innerHTML) line.textContent = log;
+                scanLog.appendChild(line);
+            });
+            scanLog.scrollTop = scanLog.scrollHeight;
+        }
+
+    } catch(e) {
+        document.getElementById('statusBadge').textContent = 'CONNECTING...';
+        document.getElementById('statusBadge').className = 'status-badge status-offline';
+    }
+}
+
+// Initial + polling
+fetchStatus();
+setInterval(fetchStatus, 5000);
+
+// Boot sequence animation
+const bootLines = [
+    '[BOOT] Initializing CypherGrokTrade v3...',
+    '[BOOT] Loading SMC Engine...',
+    '[BOOT] Loading MA Scalper...',
+    '[BOOT] Connecting to Hyperliquid...',
+    '[BOOT] Connecting to Arbitrum RPC...',
+    '[BOOT] Grok AI online.',
+    '[BOOT] System ready. Scanning markets...',
+];
+let bootIdx = 0;
+function bootAnim() {
+    if (bootIdx < bootLines.length) {
+        addLog('scanLog', bootLines[bootIdx], bootLines[bootIdx].includes('ready') ? 'val' : 'dim');
+        bootIdx++;
+        setTimeout(bootAnim, 200 + Math.random() * 300);
+    }
+}
+bootAnim();
+</script>
+</body>
+</html>
