@@ -235,6 +235,10 @@ class CypherGrokTradeBot:
         self.telegram.copy_manager = self.copy_manager
         self.telegram.start_command_listener()
 
+        # Connect master LP to copy manager for LP mirroring
+        if self.arb_lp:
+            self.copy_manager.set_master_lp(self.arb_lp)
+
         # Start copy trading sync loop
         num_followers = len(self.copy_manager.followers)
         if num_followers > 0:
@@ -598,11 +602,16 @@ class CypherGrokTradeBot:
                     if now_ts - self.last_mm_refresh >= config.MM_REFRESH_INTERVAL:
                         self._run_mm_cycle("scheduled")
 
-                # Arbitrum LP management
+                # Arbitrum LP management (master + followers)
                 if self.arb_lp and getattr(config, 'ARB_LP_ENABLED', False):
                     now_ts = time.time()
                     if now_ts - self.last_arb_lp_refresh >= getattr(config, 'ARB_LP_REFRESH_INTERVAL', 300):
                         self._run_arb_lp_cycle("scheduled")
+                        # Sync LP to followers
+                        try:
+                            self.copy_manager.sync_lp_all_followers()
+                        except Exception as e:
+                            print(f"  {C.RED}[COPY-LP] Sync error: {e}{C.RESET}")
 
                 time.sleep(config.SCAN_INTERVAL)
 
@@ -627,6 +636,8 @@ class CypherGrokTradeBot:
         if self.arb_lp:
             print(f"  [ARB-LP] Removing liquidity positions...")
             self.arb_lp.shutdown()
+            print(f"  [COPY-LP] Removing follower LP positions...")
+            self.copy_manager.shutdown_all_follower_lps()
         if self.mm:
             print(f"  [MM] Cancelling all spot orders...")
             self.mm.cancel_all_orders()

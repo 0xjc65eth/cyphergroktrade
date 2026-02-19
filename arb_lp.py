@@ -28,17 +28,26 @@ from arb_abi import (
 
 
 class ArbitrumLPManager:
-    """Manages concentrated liquidity positions on Uniswap V3 (Arbitrum)."""
+    """Manages concentrated liquidity positions on Uniswap V3 (Arbitrum).
 
-    def __init__(self):
-        rpc_url = getattr(config, "ARB_RPC_URL", "https://arb1.arbitrum.io/rpc")
-        self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
-        if not self.w3.is_connected():
-            fallback = getattr(config, "ARB_RPC_FALLBACK", "https://arbitrum.llamarpc.com")
-            self.w3 = Web3(Web3.HTTPProvider(fallback, request_kwargs={"timeout": 15}))
+    Can operate on behalf of any wallet by passing a private_key.
+    Default: uses master wallet from config.HL_PRIVATE_KEY.
+    """
 
-        self.account = Account.from_key(config.HL_PRIVATE_KEY)
+    def __init__(self, private_key: str = None, label: str = "MASTER", w3: Web3 = None):
+        if w3:
+            self.w3 = w3
+        else:
+            rpc_url = getattr(config, "ARB_RPC_URL", "https://arb1.arbitrum.io/rpc")
+            self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+            if not self.w3.is_connected():
+                fallback = getattr(config, "ARB_RPC_FALLBACK", "https://arbitrum.llamarpc.com")
+                self.w3 = Web3(Web3.HTTPProvider(fallback, request_kwargs={"timeout": 15}))
+
+        self._private_key = private_key or config.HL_PRIVATE_KEY
+        self.account = Account.from_key(self._private_key)
         self.address = self.account.address
+        self.label = label
         self.chain_id = getattr(config, "ARB_CHAIN_ID", 42161)
 
         # Contracts
@@ -154,7 +163,7 @@ class ArbitrumLPManager:
         except Exception:
             pass  # Use default 500k
 
-        signed = self.w3.eth.account.sign_transaction(tx, config.HL_PRIVATE_KEY)
+        signed = self.w3.eth.account.sign_transaction(tx, self._private_key)
         tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
         receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
         if receipt["status"] != 1:
@@ -204,7 +213,7 @@ class ArbitrumLPManager:
             self._pool_cache_time = now
             return pools
         except Exception as e:
-            print(f"[ARB-LP] DeFiLlama API error: {e}")
+            print(f"[ARB-LP:{self.label}] DeFiLlama API error: {e}")
             return self._pool_cache or []
 
     def _select_best_pool(self, pools: list) -> dict | None:
@@ -236,7 +245,7 @@ class ArbitrumLPManager:
         best = scored[0] if scored else None
 
         if best:
-            print(f"[ARB-LP] Best pool: {best['symbol']} ({best['project']}) "
+            print(f"[ARB-LP:{self.label}] Best pool: {best['symbol']} ({best['project']}) "
                   f"APY: {best['apy']:.1f}% TVL: ${best['tvl']:,.0f} Score: {best['score']:.2f}")
 
         return best
@@ -251,7 +260,7 @@ class ArbitrumLPManager:
         # Parse symbol like "USDC-USDT" or "WETH-USDC"
         parts = symbol.replace("/", "-").split("-")
         if len(parts) < 2:
-            print(f"[ARB-LP] Cannot parse pool symbol: {symbol}")
+            print(f"[ARB-LP:{self.label}] Cannot parse pool symbol: {symbol}")
             return None
 
         token0_name = parts[0].strip().upper()
@@ -261,7 +270,7 @@ class ArbitrumLPManager:
         token1_addr = tokens.get(token1_name)
 
         if not token0_addr or not token1_addr:
-            print(f"[ARB-LP] Unknown tokens: {token0_name}={token0_addr}, {token1_name}={token1_addr}")
+            print(f"[ARB-LP:{self.label}] Unknown tokens: {token0_name}={token0_addr}, {token1_name}={token1_addr}")
             return None
 
         # Try common fee tiers: 100 (0.01%), 500 (0.05%), 3000 (0.30%), 10000 (1%)
@@ -281,7 +290,7 @@ class ArbitrumLPManager:
                     "fee": fee,
                 }
 
-        print(f"[ARB-LP] No Uniswap V3 pool found for {token0_name}/{token1_name}")
+        print(f"[ARB-LP:{self.label}] No Uniswap V3 pool found for {token0_name}/{token1_name}")
         return None
 
     # ─── Tick Math ───
@@ -342,18 +351,18 @@ class ArbitrumLPManager:
         if current >= amount:
             return  # Already approved
 
-        print(f"[ARB-LP] Approving token {token_address[:10]}... for {spender[:10]}...")
+        print(f"[ARB-LP:{self.label}] Approving token {token_address[:10]}... for {spender[:10]}...")
         max_approval = 2 ** 256 - 1
         tx_func = token.functions.approve(Web3.to_checksum_address(spender), max_approval)
         self._send_tx(tx_func)
-        print(f"[ARB-LP] Approved")
+        print(f"[ARB-LP:{self.label}] Approved")
 
     def _wrap_eth(self, amount_eth: float):
         """Wrap ETH to WETH."""
         value = self.w3.to_wei(amount_eth, "ether")
         tx_func = self.weth_contract.functions.deposit()
         self._send_tx(tx_func, value=value)
-        print(f"[ARB-LP] Wrapped {amount_eth:.6f} ETH -> WETH")
+        print(f"[ARB-LP:{self.label}] Wrapped {amount_eth:.6f} ETH -> WETH")
 
     def _swap_for_tokens(self, token_in: str, token_out: str, amount_in: int, fee: int = 3000) -> int:
         """Swap tokens via Uniswap V3 router."""
@@ -372,7 +381,7 @@ class ArbitrumLPManager:
         )
         tx_func = self.swap_router.functions.exactInputSingle(params)
         receipt = self._send_tx(tx_func)
-        print(f"[ARB-LP] Swapped tokens (tx: {receipt['transactionHash'].hex()[:12]}...)")
+        print(f"[ARB-LP:{self.label}] Swapped tokens (tx: {receipt['transactionHash'].hex()[:12]}...)")
         return 0  # Actual amount from logs, but we check balance after
 
     def _ensure_tokens(self, pool_resolved: dict, alloc_usd: float):
@@ -388,8 +397,8 @@ class ArbitrumLPManager:
         bal0_human = self._token_to_human(bal0, token0)
         bal1_human = self._token_to_human(bal1, token1)
 
-        print(f"[ARB-LP] Token0 ({pool_resolved['token0_name']}): {bal0_human:.6f}")
-        print(f"[ARB-LP] Token1 ({pool_resolved['token1_name']}): {bal1_human:.6f}")
+        print(f"[ARB-LP:{self.label}] Token0 ({pool_resolved['token0_name']}): {bal0_human:.6f}")
+        print(f"[ARB-LP:{self.label}] Token1 ({pool_resolved['token1_name']}): {bal1_human:.6f}")
 
         # For stablecoin pairs, check if we already have enough
         half_alloc = alloc_usd / 2
@@ -457,7 +466,7 @@ class ArbitrumLPManager:
         bal1 = self._get_token_balance(token1)
 
         if bal0 == 0 and bal1 == 0:
-            print("[ARB-LP] No tokens to provide as liquidity")
+            print(f"[ARB-LP:{self.label}] No tokens to provide as liquidity")
             return None
 
         nft_addr = ARBITRUM_CONTRACTS["uniswap_v3_nft_manager"]
@@ -473,7 +482,7 @@ class ArbitrumLPManager:
         max_gas_pct = getattr(config, "ARB_LP_MAX_GAS_PCT", 0.10)
         alloc = getattr(config, "ARB_LP_ALLOC_USD", 2.50)
         if gas_cost > alloc * max_gas_pct:
-            print(f"[ARB-LP] Gas too expensive: ${gas_cost:.4f} > {max_gas_pct*100}% of ${alloc}")
+            print(f"[ARB-LP:{self.label}] Gas too expensive: ${gas_cost:.4f} > {max_gas_pct*100}% of ${alloc}")
             return None
 
         deadline = int(time.time()) + 300
@@ -491,7 +500,7 @@ class ArbitrumLPManager:
             deadline,
         )
 
-        print(f"[ARB-LP] Minting position: ticks [{tick_lower}, {tick_upper}] "
+        print(f"[ARB-LP:{self.label}] Minting position: ticks [{tick_lower}, {tick_upper}] "
               f"current: {current_tick}")
 
         tx_func = self.nft_manager.functions.mint(params)
@@ -508,9 +517,9 @@ class ArbitrumLPManager:
                     break
 
         if token_id:
-            print(f"[ARB-LP] Position minted! Token ID: {token_id}")
+            print(f"[ARB-LP:{self.label}] Position minted! Token ID: {token_id}")
         else:
-            print(f"[ARB-LP] Position minted (tx: {receipt['transactionHash'].hex()[:12]}...) but could not extract token ID")
+            print(f"[ARB-LP:{self.label}] Position minted (tx: {receipt['transactionHash'].hex()[:12]}...) but could not extract token ID")
 
         return token_id
 
@@ -554,7 +563,7 @@ class ArbitrumLPManager:
                 "tokens_owed1": tokens_owed1,
             }
         except Exception as e:
-            print(f"[ARB-LP] Error checking position: {e}")
+            print(f"[ARB-LP:{self.label}] Error checking position: {e}")
             return None
 
     def _collect_fees(self, token_id: int):
@@ -565,14 +574,14 @@ class ArbitrumLPManager:
         gas_cost = self._estimate_gas_cost_usd(150_000)
         min_collect = getattr(config, "ARB_LP_FEE_COLLECT_MIN_USD", 0.02)
         if gas_cost > min_collect:
-            print(f"[ARB-LP] Fee collection gas (${gas_cost:.4f}) > min threshold (${min_collect})")
+            print(f"[ARB-LP:{self.label}] Fee collection gas (${gas_cost:.4f}) > min threshold (${min_collect})")
             return
 
-        print(f"[ARB-LP] Collecting fees for position {token_id}...")
+        print(f"[ARB-LP:{self.label}] Collecting fees for position {token_id}...")
         tx_func = self.nft_manager.functions.collect(params)
         self._send_tx(tx_func)
         self.last_fee_collection = time.time()
-        print(f"[ARB-LP] Fees collected")
+        print(f"[ARB-LP:{self.label}] Fees collected")
 
     def _remove_liquidity(self, token_id: int):
         """Remove all liquidity from position."""
@@ -581,13 +590,13 @@ class ArbitrumLPManager:
             liquidity = pos[7]
 
             if liquidity == 0:
-                print(f"[ARB-LP] Position {token_id} has no liquidity")
+                print(f"[ARB-LP:{self.label}] Position {token_id} has no liquidity")
                 return
 
             deadline = int(time.time()) + 300
             params = (token_id, liquidity, 0, 0, deadline)
 
-            print(f"[ARB-LP] Removing liquidity from position {token_id}...")
+            print(f"[ARB-LP:{self.label}] Removing liquidity from position {token_id}...")
             tx_func = self.nft_manager.functions.decreaseLiquidity(params)
             self._send_tx(tx_func)
 
@@ -597,9 +606,9 @@ class ArbitrumLPManager:
             tx_func = self.nft_manager.functions.collect(collect_params)
             self._send_tx(tx_func)
 
-            print(f"[ARB-LP] Liquidity removed and tokens collected")
+            print(f"[ARB-LP:{self.label}] Liquidity removed and tokens collected")
         except Exception as e:
-            print(f"[ARB-LP] Error removing liquidity: {e}")
+            print(f"[ARB-LP:{self.label}] Error removing liquidity: {e}")
 
     def _should_rebalance(self, status: dict) -> bool:
         """Determine if position needs rebalancing."""
@@ -619,7 +628,7 @@ class ArbitrumLPManager:
         max_gas_pct = getattr(config, "ARB_LP_MAX_GAS_PCT", 0.10)
 
         if gas_cost > alloc * max_gas_pct * 2:  # 2x threshold for rebalance
-            print(f"[ARB-LP] Rebalance gas too high: ${gas_cost:.4f}")
+            print(f"[ARB-LP:{self.label}] Rebalance gas too high: ${gas_cost:.4f}")
             return False
 
         return True
@@ -632,21 +641,21 @@ class ArbitrumLPManager:
             # 1. Check gas availability
             eth_balance = self._get_eth_balance()
             if eth_balance < 0.00005:  # ~$0.10 at $2000/ETH
-                print(f"[ARB-LP] Insufficient ETH for gas: {eth_balance:.6f} ETH")
+                print(f"[ARB-LP:{self.label}] Insufficient ETH for gas: {eth_balance:.6f} ETH")
                 return
 
-            print(f"[ARB-LP] ETH balance: {eth_balance:.6f} (~${eth_balance * self._get_eth_price():.2f})")
+            print(f"[ARB-LP:{self.label}] ETH balance: {eth_balance:.6f} (~${eth_balance * self._get_eth_price():.2f})")
 
             # 2. If no active position, discover and enter
             if not self.active_position:
                 pools = self._fetch_pool_yields()
                 if not pools:
-                    print("[ARB-LP] No pools found meeting criteria")
+                    print(f"[ARB-LP:{self.label}] No pools found meeting criteria")
                     return
 
                 best = self._select_best_pool(pools)
                 if not best:
-                    print("[ARB-LP] No suitable pool found")
+                    print(f"[ARB-LP:{self.label}] No suitable pool found")
                     return
 
                 # Resolve to on-chain addresses
@@ -665,18 +674,18 @@ class ArbitrumLPManager:
                         "pool_address": resolved["pool_address"],
                         "entry_time": time.time(),
                     }
-                    print(f"[ARB-LP] Position active: {best['symbol']} (APY: {best['apy']:.1f}%)")
+                    print(f"[ARB-LP:{self.label}] Position active: {best['symbol']} (APY: {best['apy']:.1f}%)")
                 return
 
             # 3. Monitor existing position
             status = self._check_position()
             if not status:
-                print("[ARB-LP] Could not check position, clearing state")
+                print(f"[ARB-LP:{self.label}] Could not check position, clearing state")
                 self.active_position = None
                 return
 
             range_str = "IN RANGE" if status["in_range"] else "OUT OF RANGE"
-            print(f"[ARB-LP] Position {status['token_id']}: {range_str} | "
+            print(f"[ARB-LP:{self.label}] Position {status['token_id']}: {range_str} | "
                   f"Liquidity: {status['liquidity']} | "
                   f"Tick: {status['current_tick']} [{status['tick_lower']}, {status['tick_upper']}]")
 
@@ -688,20 +697,68 @@ class ArbitrumLPManager:
 
             # 5. Rebalance if needed
             if self._should_rebalance(status):
-                print(f"[ARB-LP] Rebalancing position (out of range)")
+                print(f"[ARB-LP:{self.label}] Rebalancing position (out of range)")
                 self._remove_liquidity(self.active_position["token_id"])
                 self.active_position = None
                 # Next cycle will re-enter with fresh pool selection
 
         except Exception as e:
-            print(f"[ARB-LP] Error: {e}")
+            print(f"[ARB-LP:{self.label}] Error: {e}")
+
+    def get_active_pool_info(self) -> dict | None:
+        """Return the active position's pool info for copy trading."""
+        if not self.active_position:
+            return None
+        pool = self.active_position.get("pool")
+        if not pool:
+            return None
+        return {
+            "pool": pool,
+            "pool_address": self.active_position.get("pool_address"),
+            "has_position": True,
+        }
+
+    def mirror_master_pool(self, pool_info: dict):
+        """Enter the same pool as the master (used by followers).
+
+        pool_info: dict from master's get_active_pool_info()
+        """
+        if self.active_position:
+            return  # Already in a position
+
+        pool = pool_info.get("pool")
+        if not pool:
+            return
+
+        resolved = self._resolve_pool_tokens(pool)
+        if not resolved:
+            return
+
+        # Check gas
+        eth_balance = self._get_eth_balance()
+        if eth_balance < 0.00005:
+            print(f"[ARB-LP:{self.label}] Insufficient ETH for gas: {eth_balance:.6f}")
+            return
+
+        alloc = getattr(config, "ARB_LP_ALLOC_USD", 2.50)
+        self._ensure_tokens(resolved, alloc)
+
+        token_id = self._add_liquidity(resolved)
+        if token_id:
+            self.active_position = {
+                "token_id": token_id,
+                "pool": pool,
+                "pool_address": resolved["pool_address"],
+                "entry_time": time.time(),
+            }
+            print(f"[ARB-LP:{self.label}] Mirrored master pool: {pool['symbol']}")
 
     def shutdown(self):
         """Remove all positions on bot shutdown."""
         if self.active_position and self.active_position.get("token_id"):
-            print(f"[ARB-LP] Shutdown: removing position {self.active_position['token_id']}...")
+            print(f"[ARB-LP:{self.label}] Shutdown: removing position {self.active_position['token_id']}...")
             try:
                 self._remove_liquidity(self.active_position["token_id"])
             except Exception as e:
-                print(f"[ARB-LP] Shutdown error: {e}")
+                print(f"[ARB-LP:{self.label}] Shutdown error: {e}")
             self.active_position = None

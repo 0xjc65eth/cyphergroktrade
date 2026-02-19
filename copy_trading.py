@@ -14,6 +14,12 @@ from hyperliquid.exchange import Exchange
 from hyperliquid.info import Info
 from eth_account import Account
 
+try:
+    from arb_lp import ArbitrumLPManager
+    HAS_ARB_LP = True
+except ImportError:
+    HAS_ARB_LP = False
+
 FOLLOWERS_FILE = "followers.json"
 COPY_LOG_FILE = "copy_trades_log.json"
 FEE_LOG_FILE = "fee_collection_log.json"
@@ -248,6 +254,11 @@ class CopyTradingManager:
         self.fee_tracker = FeeTracker(self.fee_wallet)
         self._last_fee_collection = 0
         self._lock = threading.Lock()
+
+        # LP copy state: one ArbitrumLPManager per follower
+        self._follower_lp_managers = {}  # wallet_address -> ArbitrumLPManager
+        self._master_lp_ref = None  # Set by bot.py to reference master's ArbitrumLPManager
+
         print(f"[COPY] Initialized. Master: {master_address[:10]}...")
         print(f"[COPY] {len(self.followers)} followers loaded.")
 
@@ -595,6 +606,87 @@ class CopyTradingManager:
                 json.dump(logs, f, indent=2)
         except:
             pass
+
+    # ─── LP Copy Trading ───
+
+    def set_master_lp(self, master_lp: object):
+        """Set reference to master's ArbitrumLPManager for LP mirroring."""
+        self._master_lp_ref = master_lp
+
+    def _get_follower_lp(self, follower: dict) -> object:
+        """Get or create an ArbitrumLPManager for a follower."""
+        if not HAS_ARB_LP:
+            return None
+
+        import config as cfg
+        if not getattr(cfg, 'ARB_LP_ENABLED', False):
+            return None
+
+        wallet = follower["wallet_address"]
+        if wallet not in self._follower_lp_managers:
+            try:
+                # Reuse the master's web3 connection
+                w3 = self._master_lp_ref.w3 if self._master_lp_ref else None
+                lp = ArbitrumLPManager(
+                    private_key=follower["private_key"],
+                    label=follower["name"],
+                    w3=w3,
+                )
+                self._follower_lp_managers[wallet] = lp
+                print(f"[COPY-LP] Created LP manager for {follower['name']}")
+            except Exception as e:
+                print(f"[COPY-LP] Error creating LP for {follower['name']}: {e}")
+                return None
+        return self._follower_lp_managers[wallet]
+
+    def sync_lp_all_followers(self):
+        """Mirror master's LP position to all active followers."""
+        if not self._master_lp_ref or not HAS_ARB_LP:
+            return
+
+        import config as cfg
+        if not getattr(cfg, 'ARB_LP_ENABLED', False):
+            return
+
+        master_pool = self._master_lp_ref.get_active_pool_info()
+
+        active_followers = [f for f in self.followers if f.get("active", False)]
+        if not active_followers:
+            return
+
+        for follower in active_followers:
+            try:
+                lp = self._get_follower_lp(follower)
+                if not lp:
+                    continue
+
+                if master_pool and master_pool.get("has_position"):
+                    # Master has LP -> follower should mirror
+                    if not lp.active_position:
+                        print(f"[COPY-LP] Mirroring LP to {follower['name']}...")
+                        lp.mirror_master_pool(master_pool)
+                    else:
+                        # Follower already has position, just monitor
+                        lp.run_cycle()
+                else:
+                    # Master has no LP -> follower should exit
+                    if lp.active_position:
+                        print(f"[COPY-LP] Master exited LP, closing {follower['name']}...")
+                        lp.shutdown()
+
+                time.sleep(1)  # Rate limit between followers
+            except Exception as e:
+                print(f"[COPY-LP] Error syncing LP for {follower['name']}: {e}")
+
+    def shutdown_all_follower_lps(self):
+        """Remove all follower LP positions (called on bot shutdown)."""
+        for wallet, lp in self._follower_lp_managers.items():
+            try:
+                if lp.active_position:
+                    lp.shutdown()
+            except Exception as e:
+                print(f"[COPY-LP] Shutdown error for {wallet[:10]}: {e}")
+        self._follower_lp_managers.clear()
 
     # ─── Background Sync Thread ───
 
