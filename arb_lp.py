@@ -839,29 +839,83 @@ class ArbitrumLPManager:
             "has_position": True,
         }
 
-    def mirror_master_pool(self, pool_info: dict):
+    def _collect_lp_copy_fee(self, fee_recipient: str, alloc_usd: float) -> float:
+        """Collect LP copy fee from follower and transfer to master.
+
+        Charges ARB_LP_COPY_FEE_PCT of allocation in USDC.
+        Returns the fee amount in USD (deducted from allocation).
+        """
+        fee_pct = getattr(config, "ARB_LP_COPY_FEE_PCT", 0.05)
+        if fee_pct <= 0:
+            return 0.0
+
+        fee_usd = alloc_usd * fee_pct
+        if fee_usd < 0.01:
+            return 0.0
+
+        usdc_addr = getattr(config, "ARB_TOKENS", {}).get("USDC")
+        if not usdc_addr:
+            print(f"[ARB-LP:{self.label}] No USDC address for fee collection")
+            return 0.0
+
+        try:
+            usdc = self.w3.eth.contract(
+                address=Web3.to_checksum_address(usdc_addr), abi=ERC20_ABI
+            )
+            decimals = usdc.functions.decimals().call()
+            fee_amount = int(fee_usd * (10 ** decimals))
+
+            balance = usdc.functions.balanceOf(self.address).call()
+            if balance < fee_amount:
+                print(f"[ARB-LP:{self.label}] Insufficient USDC for LP fee: have {balance / 10**decimals:.4f}, need {fee_usd:.4f}")
+                return 0.0
+
+            # Transfer fee to master
+            tx_func = usdc.functions.transfer(
+                Web3.to_checksum_address(fee_recipient), fee_amount
+            )
+            receipt = self._send_tx(tx_func)
+            print(f"[ARB-LP:{self.label}] LP copy fee: ${fee_usd:.4f} USDC -> {fee_recipient[:10]}... (tx: {receipt['transactionHash'].hex()[:12]}...)")
+            return fee_usd
+
+        except Exception as e:
+            print(f"[ARB-LP:{self.label}] LP copy fee error: {e}")
+            return 0.0
+
+    def mirror_master_pool(self, pool_info: dict, fee_recipient: str = None) -> float:
         """Enter the same pool as the master (used by followers).
 
         pool_info: dict from master's get_active_pool_info()
+        fee_recipient: master wallet address to receive LP copy fee
+        Returns: fee amount collected (0.0 if no fee or failed)
         """
         if self.active_position:
-            return  # Already in a position
+            return 0.0  # Already in a position
 
         pool = pool_info.get("pool")
         if not pool:
-            return
+            return 0.0
 
         resolved = self._resolve_pool_tokens(pool)
         if not resolved:
-            return
+            return 0.0
 
         # Check gas
         eth_balance = self._get_eth_balance()
         if eth_balance < 0.00005:
             print(f"[ARB-LP:{self.label}] Insufficient ETH for gas: {eth_balance:.6f}")
-            return
+            return 0.0
 
         alloc = getattr(config, "ARB_LP_ALLOC_USD", 2.50)
+
+        # Collect LP copy fee before minting
+        fee_taken = 0.0
+        if fee_recipient:
+            fee_taken = self._collect_lp_copy_fee(fee_recipient, alloc)
+            if fee_taken > 0:
+                alloc -= fee_taken  # Reduce allocation by fee amount
+                print(f"[ARB-LP:{self.label}] Allocation after fee: ${alloc:.4f}")
+
         self._ensure_tokens(resolved, alloc)
 
         token_id = self._add_liquidity(resolved)
@@ -872,7 +926,9 @@ class ArbitrumLPManager:
                 "pool_address": resolved["pool_address"],
                 "entry_time": time.time(),
             }
-            print(f"[ARB-LP:{self.label}] Mirrored master pool: {pool['symbol']}")
+            print(f"[ARB-LP:{self.label}] Mirrored master pool: {pool['symbol']} (fee: ${fee_taken:.4f})")
+
+        return fee_taken
 
     def shutdown(self):
         """Remove all positions on bot shutdown."""

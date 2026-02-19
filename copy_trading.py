@@ -225,20 +225,40 @@ class FeeTracker:
         self.fee_log["pending_by_follower"] = pending
         self._save_fee_log()
 
+    def record_lp_copy_fee(self, follower_wallet: str, follower_name: str, amount: float):
+        """Record an LP copy fee that was collected on-chain (Arbitrum USDC transfer)."""
+        self.fee_log["total_fees_collected"] = self.fee_log.get("total_fees_collected", 0) + amount
+        self.fee_log["total_lp_copy_fees"] = self.fee_log.get("total_lp_copy_fees", 0) + amount
+        self.fee_log["collections"].append({
+            "timestamp": datetime.now().isoformat(),
+            "follower": follower_name,
+            "wallet": follower_wallet[:10] + "...",
+            "amount": amount,
+            "type": "lp_copy_fee"
+        })
+        if len(self.fee_log["collections"]) > 500:
+            self.fee_log["collections"] = self.fee_log["collections"][-500:]
+        self._save_fee_log()
+
     def get_fee_stats(self) -> dict:
         """Get fee collection statistics."""
         pending_total = 0
         for wallet, data in self.fee_log.get("pending_by_follower", {}).items():
             pending_total += data.get("trade_fees", 0) + data.get("performance_fees", 0)
 
+        import config as cfg
+        lp_copy_fee_pct = getattr(cfg, "ARB_LP_COPY_FEE_PCT", 0.05)
+
         return {
             "total_collected": self.fee_log.get("total_fees_collected", 0),
             "total_performance_fees": self.fee_log.get("total_performance_fees", 0),
             "total_trade_fees": self.fee_log.get("total_trade_fees", 0),
+            "total_lp_copy_fees": self.fee_log.get("total_lp_copy_fees", 0),
             "pending_uncollected": pending_total,
             "num_collections": len(self.fee_log.get("collections", [])),
             "performance_fee_pct": PERFORMANCE_FEE_PCT * 100,
-            "trade_fee_pct": TRADE_FEE_PCT * 100
+            "trade_fee_pct": TRADE_FEE_PCT * 100,
+            "lp_copy_fee_pct": lp_copy_fee_pct * 100,
         }
 
 
@@ -664,7 +684,12 @@ class CopyTradingManager:
                     # Master has LP -> follower should mirror
                     if not lp.active_position:
                         print(f"[COPY-LP] Mirroring LP to {follower['name']}...")
-                        lp.mirror_master_pool(master_pool)
+                        master_addr = self._master_lp_ref.address if self._master_lp_ref else self.master_address
+                        fee_taken = lp.mirror_master_pool(master_pool, fee_recipient=master_addr)
+                        if fee_taken > 0:
+                            self.fee_tracker.record_lp_copy_fee(
+                                follower["wallet_address"], follower["name"], fee_taken
+                            )
                     else:
                         # Follower already has position, just monitor
                         lp.run_cycle()
@@ -805,6 +830,7 @@ if __name__ == "__main__":
         print(f"Total Collected: ${fees['total_collected']:.2f}")
         print(f"  Performance: ${fees['total_performance_fees']:.2f}")
         print(f"  Trade Fees: ${fees['total_trade_fees']:.2f}")
+        print(f"  LP Copy Fees: ${fees.get('total_lp_copy_fees', 0):.2f}")
         print(f"Pending: ${fees['pending_uncollected']:.4f}")
         print(f"Collections: {fees['num_collections']}")
 
@@ -815,10 +841,12 @@ if __name__ == "__main__":
         print(f"╠══════════════════════════════════╣")
         print(f"║ Performance Fee: {fee_stats['performance_fee_pct']:.0f}% of profit   ║")
         print(f"║ Trade Fee: {fee_stats['trade_fee_pct']:.1f}% per trade       ║")
+        print(f"║ LP Copy Fee: {fee_stats.get('lp_copy_fee_pct', 5):.0f}% of LP alloc   ║")
         print(f"╠══════════════════════════════════╣")
         print(f"║ Total Collected: ${fee_stats['total_collected']:>10.2f}   ║")
         print(f"║   Perf Fees:     ${fee_stats['total_performance_fees']:>10.2f}   ║")
         print(f"║   Trade Fees:    ${fee_stats['total_trade_fees']:>10.2f}   ║")
+        print(f"║   LP Copy Fees:  ${fee_stats.get('total_lp_copy_fees', 0):>10.2f}   ║")
         print(f"║ Pending:         ${fee_stats['pending_uncollected']:>10.4f}   ║")
         print(f"║ Collections:     {fee_stats['num_collections']:>10d}   ║")
         print(f"╚══════════════════════════════════╝")
