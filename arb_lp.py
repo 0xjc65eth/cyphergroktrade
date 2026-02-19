@@ -82,6 +82,54 @@ class ArbitrumLPManager:
         wei = self.w3.eth.get_balance(self.address)
         return float(Web3.from_wei(wei, "ether"))
 
+    def _get_arb_total_usd(self) -> float:
+        """Estimate total USD value available on Arbitrum (ETH + USDC + WETH)."""
+        tokens = getattr(config, "ARB_TOKENS", {})
+        total = 0.0
+        # ETH
+        eth_bal = self._get_eth_balance()
+        eth_price = self._get_eth_price()
+        total += eth_bal * eth_price
+        # USDC
+        usdc_addr = tokens.get("USDC", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831")
+        total += self._token_to_human(self._get_token_balance(usdc_addr), usdc_addr)
+        # USDC.e
+        usdce_addr = tokens.get("USDC.e")
+        if usdce_addr:
+            total += self._token_to_human(self._get_token_balance(usdce_addr), usdce_addr)
+        # WETH
+        weth_addr = tokens.get("WETH", ARBITRUM_CONTRACTS["weth"])
+        weth_bal = self._token_to_human(self._get_token_balance(weth_addr), weth_addr)
+        total += weth_bal * eth_price
+        return total
+
+    def _bridge_from_hl(self, amount_usd: float) -> bool:
+        """Withdraw USDC from Hyperliquid to this wallet on Arbitrum.
+        Uses the HL SDK withdraw_from_bridge (L1 -> Arbitrum)."""
+        try:
+            from hyperliquid.exchange import Exchange
+            from hyperliquid import constants
+            from eth_account import Account as EthAccount
+
+            account = EthAccount.from_key(self._private_key)
+            exchange = Exchange(
+                account,
+                constants.MAINNET_API_URL,
+                vault_address=None,
+                account_address=self.address,
+            )
+            result = exchange.withdraw_from_bridge(amount_usd, self.address)
+            if result.get("status") == "ok":
+                print(f"[ARB-LP:{self.label}] Bridge OK: ${amount_usd:.2f} USDC from HL -> Arbitrum")
+                print(f"[ARB-LP:{self.label}] Wait ~2 min for USDC to arrive on Arbitrum")
+                return True
+            else:
+                print(f"[ARB-LP:{self.label}] Bridge failed: {result}")
+                return False
+        except Exception as e:
+            print(f"[ARB-LP:{self.label}] Bridge error: {e}")
+            return False
+
     def _get_token_balance(self, token_address: str) -> int:
         """Get ERC20 token balance (raw units)."""
         token = self.w3.eth.contract(
@@ -769,6 +817,22 @@ class ArbitrumLPManager:
 
             # 2. If no active position, discover and enter
             if not self.active_position:
+                # Check if we have enough funds on Arbitrum, bridge from HL if not
+                alloc = getattr(config, "ARB_LP_ALLOC_USD", 2.50)
+                arb_usd = self._get_arb_total_usd()
+                print(f"[ARB-LP:{self.label}] Arbitrum balance: ~${arb_usd:.2f} (target: ${alloc:.2f})")
+
+                if arb_usd < alloc * 0.5:
+                    # Need to bridge from Hyperliquid
+                    bridge_amount = alloc + 1.0  # Extra $1 for gas/swaps
+                    print(f"[ARB-LP:{self.label}] Low Arbitrum balance, bridging ${bridge_amount:.2f} from Hyperliquid...")
+                    if self._bridge_from_hl(bridge_amount):
+                        # USDC takes ~2 min to arrive, skip this cycle
+                        print(f"[ARB-LP:{self.label}] Bridge initiated, will use funds next cycle")
+                        return
+                    else:
+                        print(f"[ARB-LP:{self.label}] Bridge failed, using available balance")
+
                 pools = self._fetch_pool_yields()
                 if not pools:
                     print(f"[ARB-LP:{self.label}] No pools found meeting criteria")
@@ -784,7 +848,6 @@ class ArbitrumLPManager:
                 if not resolved:
                     return
 
-                alloc = getattr(config, "ARB_LP_ALLOC_USD", 2.50)
                 self._ensure_tokens(resolved, alloc)
 
                 token_id = self._add_liquidity(resolved)
