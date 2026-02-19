@@ -34,15 +34,19 @@ class ArbitrumLPManager:
     Default: uses master wallet from config.HL_PRIVATE_KEY.
     """
 
+    # Multiple RPCs for reliability
+    RPC_ENDPOINTS = [
+        "https://arb1.arbitrum.io/rpc",
+        "https://arbitrum.llamarpc.com",
+        "https://rpc.ankr.com/arbitrum",
+        "https://arbitrum.drpc.org",
+    ]
+
     def __init__(self, private_key: str = None, label: str = "MASTER", w3: Web3 = None):
         if w3:
             self.w3 = w3
         else:
-            rpc_url = getattr(config, "ARB_RPC_URL", "https://arb1.arbitrum.io/rpc")
-            self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
-            if not self.w3.is_connected():
-                fallback = getattr(config, "ARB_RPC_FALLBACK", "https://arbitrum.llamarpc.com")
-                self.w3 = Web3(Web3.HTTPProvider(fallback, request_kwargs={"timeout": 15}))
+            self.w3 = self._connect_rpc()
 
         self._private_key = private_key or config.HL_PRIVATE_KEY
         self.account = Account.from_key(self._private_key)
@@ -74,6 +78,49 @@ class ArbitrumLPManager:
         self._pool_cache = None
         self._pool_cache_time = 0
         self._token_decimals_cache = {}
+
+    # ─── RPC Helpers ───
+
+    def _connect_rpc(self) -> Web3:
+        """Try connecting to multiple RPC endpoints."""
+        rpcs = list(self.RPC_ENDPOINTS)
+        custom = getattr(config, "ARB_RPC_URL", None)
+        if custom and custom not in rpcs:
+            rpcs.insert(0, custom)
+        fallback = getattr(config, "ARB_RPC_FALLBACK", None)
+        if fallback and fallback not in rpcs:
+            rpcs.insert(1, fallback)
+
+        for rpc in rpcs:
+            try:
+                w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 10}))
+                if w3.is_connected():
+                    return w3
+            except Exception:
+                continue
+        # Last resort
+        return Web3(Web3.HTTPProvider(rpcs[0], request_kwargs={"timeout": 15}))
+
+    def _reconnect_rpc(self):
+        """Reconnect to a working RPC (called after connection errors)."""
+        self.w3 = self._connect_rpc()
+        # Rebuild contracts with new w3
+        self.factory = self.w3.eth.contract(
+            address=Web3.to_checksum_address(ARBITRUM_CONTRACTS["uniswap_v3_factory"]),
+            abi=UNISWAP_V3_FACTORY_ABI,
+        )
+        self.nft_manager = self.w3.eth.contract(
+            address=Web3.to_checksum_address(ARBITRUM_CONTRACTS["uniswap_v3_nft_manager"]),
+            abi=UNISWAP_V3_NFT_MANAGER_ABI,
+        )
+        self.swap_router = self.w3.eth.contract(
+            address=Web3.to_checksum_address(ARBITRUM_CONTRACTS["uniswap_v3_swap_router"]),
+            abi=UNISWAP_V3_SWAP_ROUTER_ABI,
+        )
+        self.weth_contract = self.w3.eth.contract(
+            address=Web3.to_checksum_address(ARBITRUM_CONTRACTS["weth"]),
+            abi=WETH_ABI,
+        )
 
     # ─── Helpers ───
 
@@ -156,6 +203,22 @@ class ArbitrumLPManager:
         """Convert human-readable amount to raw token units."""
         decimals = self._get_token_decimals(token_address)
         return int(amount * (10 ** decimals))
+
+    def _token_value_usd(self, token_address: str, raw_amount: int) -> float:
+        """Estimate USD value of a raw token amount."""
+        human = self._token_to_human(raw_amount, token_address)
+        addr_lower = token_address.lower()
+        tokens = getattr(config, "ARB_TOKENS", {})
+        # Stablecoins: 1:1
+        stables = [tokens.get(s, "").lower() for s in ("USDC", "USDT", "USDC.e", "DAI") if tokens.get(s)]
+        if addr_lower in stables:
+            return human
+        # WETH or native ETH
+        weth_lower = ARBITRUM_CONTRACTS["weth"].lower()
+        if addr_lower == weth_lower:
+            return human * self._get_eth_price()
+        # Other tokens: rough estimate via amount (conservative)
+        return human * 0.01  # Unknown token, assume low value
 
     def _estimate_gas_cost_usd(self, gas_estimate: int) -> float:
         """Estimate gas cost in USD."""
@@ -545,6 +608,14 @@ class ArbitrumLPManager:
             print(f"[ARB-LP:{self.label}] No tokens to provide as liquidity")
             return None
 
+        # Check minimum value to avoid revert on dust amounts
+        t0_usd = self._token_value_usd(token0, bal0)
+        t1_usd = self._token_value_usd(token1, bal1)
+        total_usd = t0_usd + t1_usd
+        if total_usd < 0.30:
+            print(f"[ARB-LP:{self.label}] Token value too low (${total_usd:.2f}), skipping mint")
+            return None
+
         nft_addr = ARBITRUM_CONTRACTS["uniswap_v3_nft_manager"]
 
         # Approve both tokens
@@ -764,39 +835,44 @@ class ArbitrumLPManager:
 
     def _recover_existing_positions(self):
         """Check for existing LP NFT positions owned by this wallet.
-        Restores active_position state if a position with liquidity is found."""
-        try:
-            nft_count = self.nft_manager.functions.balanceOf(self.address).call()
-            if nft_count == 0:
-                return
-            print(f"[ARB-LP:{self.label}] Found {nft_count} existing NFT position(s), checking...")
-            for i in range(nft_count):
-                token_id = self.nft_manager.functions.tokenOfOwnerByIndex(self.address, i).call()
-                pos = self.nft_manager.functions.positions(token_id).call()
-                liquidity = pos[7]
-                if liquidity > 0:
-                    token0 = pos[2]
-                    token1 = pos[3]
-                    fee = pos[4]
-                    pool_addr = self.factory.functions.getPool(
-                        Web3.to_checksum_address(token0),
-                        Web3.to_checksum_address(token1),
-                        fee,
-                    ).call()
-                    # Resolve token names for proper symbol
-                    t0_name = self._addr_to_token_name(token0) or "UNKNOWN"
-                    t1_name = self._addr_to_token_name(token1) or "UNKNOWN"
-                    symbol = f"{t0_name}-{t1_name}"
-                    self.active_position = {
-                        "token_id": token_id,
-                        "pool": {"symbol": symbol, "apy": 0, "tvl": 0, "fee": fee},
-                        "pool_address": pool_addr,
-                        "entry_time": time.time(),
-                    }
-                    print(f"[ARB-LP:{self.label}] Recovered position #{token_id} ({symbol} fee={fee}, liquidity={liquidity})")
+        Restores active_position state if a position with liquidity is found.
+        Retries with RPC reconnect on failure."""
+        for attempt in range(3):
+            try:
+                nft_count = self.nft_manager.functions.balanceOf(self.address).call()
+                if nft_count == 0:
                     return
-        except Exception as e:
-            print(f"[ARB-LP:{self.label}] Position recovery error: {e}")
+                print(f"[ARB-LP:{self.label}] Found {nft_count} existing NFT position(s), checking...")
+                for i in range(nft_count):
+                    token_id = self.nft_manager.functions.tokenOfOwnerByIndex(self.address, i).call()
+                    pos = self.nft_manager.functions.positions(token_id).call()
+                    liquidity = pos[7]
+                    if liquidity > 0:
+                        token0 = pos[2]
+                        token1 = pos[3]
+                        fee = pos[4]
+                        pool_addr = self.factory.functions.getPool(
+                            Web3.to_checksum_address(token0),
+                            Web3.to_checksum_address(token1),
+                            fee,
+                        ).call()
+                        t0_name = self._addr_to_token_name(token0) or "UNKNOWN"
+                        t1_name = self._addr_to_token_name(token1) or "UNKNOWN"
+                        symbol = f"{t0_name}-{t1_name}"
+                        self.active_position = {
+                            "token_id": token_id,
+                            "pool": {"symbol": symbol, "apy": 0, "tvl": 0, "fee": fee},
+                            "pool_address": pool_addr,
+                            "entry_time": time.time(),
+                        }
+                        print(f"[ARB-LP:{self.label}] Recovered position #{token_id} ({symbol} fee={fee}, liquidity={liquidity})")
+                        return
+                return  # No positions with liquidity
+            except Exception as e:
+                print(f"[ARB-LP:{self.label}] Recovery attempt {attempt+1}/3 failed: {e}")
+                if attempt < 2:
+                    self._reconnect_rpc()
+                    time.sleep(2)
 
     # ─── Main Cycle ───
 
@@ -821,8 +897,8 @@ class ArbitrumLPManager:
                 arb_usd = self._get_arb_total_usd()
                 print(f"[ARB-LP:{self.label}] Arbitrum balance: ~${arb_usd:.2f} (target: ${alloc:.2f})")
 
-                if arb_usd < 0.10:
-                    print(f"[ARB-LP:{self.label}] No funds on Arbitrum, skipping LP cycle")
+                if arb_usd < 0.50:
+                    print(f"[ARB-LP:{self.label}] Insufficient funds on Arbitrum (need >$0.50), skipping")
                     return
 
                 # Use what's available, cap at alloc
@@ -882,7 +958,10 @@ class ArbitrumLPManager:
                 # Next cycle will re-enter with fresh pool selection
 
         except Exception as e:
-            print(f"[ARB-LP:{self.label}] Error: {e}")
+            err_str = str(e)
+            print(f"[ARB-LP:{self.label}] Error: {err_str}")
+            if "Connection" in err_str or "Remote" in err_str or "timeout" in err_str.lower():
+                self._reconnect_rpc()
 
     def get_active_pool_info(self) -> dict | None:
         """Return the active position's pool info for copy trading."""

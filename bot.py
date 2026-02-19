@@ -560,8 +560,8 @@ class CypherGrokTradeBot:
                     # === EXECUTE ===
                     leverage = config.LEVERAGE_MAP.get(coin, config.LEVERAGE_MAP_DEFAULT)
                     size_usd = balance * config.MAX_RISK_PER_TRADE * leverage
-                    # Limitar a 30% do balance alavancado (era 80%)
-                    size_usd = min(size_usd, balance * 0.30 * leverage)
+                    # Cap at 50% of balance * leverage
+                    size_usd = min(size_usd, balance * 0.50 * leverage)
                     # Minimo $11 para Hyperliquid
                     size_usd = max(size_usd, 11.0)
 

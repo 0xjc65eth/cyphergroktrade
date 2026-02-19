@@ -190,7 +190,7 @@ class HyperliquidExecutor:
                 min_sz = 10 ** (-sz_decimals) if sz_decimals > 0 else 1
             sz = max(sz, min_sz)
 
-            leverage = config.LEVERAGE_MAP.get(coin, config.LEVERAGE)
+            leverage = config.LEVERAGE_MAP.get(coin, getattr(config, 'LEVERAGE_MAP_DEFAULT', config.LEVERAGE))
             self.set_leverage(coin, leverage)
 
             result = self.exchange.market_open(
