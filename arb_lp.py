@@ -601,21 +601,58 @@ class ArbitrumLPManager:
             return None
 
     def _collect_fees(self, token_id: int):
-        """Collect accumulated fees from position."""
+        """Collect accumulated fees and auto-compound back into the position."""
         max_uint128 = 2 ** 128 - 1
         params = (token_id, self.address, max_uint128, max_uint128)
 
-        gas_cost = self._estimate_gas_cost_usd(150_000)
+        # Gas for collect + increaseLiquidity (compound)
+        gas_cost = self._estimate_gas_cost_usd(300_000)
         min_collect = getattr(config, "ARB_LP_FEE_COLLECT_MIN_USD", 0.02)
         if gas_cost > min_collect:
             print(f"[ARB-LP:{self.label}] Fee collection gas (${gas_cost:.4f}) > min threshold (${min_collect})")
             return
 
+        # Get token addresses from position
+        pos = self.nft_manager.functions.positions(token_id).call()
+        token0 = pos[2]
+        token1 = pos[3]
+
+        # Snapshot balances before collect
+        bal0_before = self._get_token_balance(token0)
+        bal1_before = self._get_token_balance(token1)
+
         print(f"[ARB-LP:{self.label}] Collecting fees for position {token_id}...")
         tx_func = self.nft_manager.functions.collect(params)
         self._send_tx(tx_func)
         self.last_fee_collection = time.time()
-        print(f"[ARB-LP:{self.label}] Fees collected")
+
+        # Calculate collected amounts
+        bal0_after = self._get_token_balance(token0)
+        bal1_after = self._get_token_balance(token1)
+        collected0 = bal0_after - bal0_before
+        collected1 = bal1_after - bal1_before
+
+        if collected0 <= 0 and collected1 <= 0:
+            print(f"[ARB-LP:{self.label}] No fees to compound")
+            return
+
+        print(f"[ARB-LP:{self.label}] Fees collected, compounding back into position...")
+
+        # Auto-compound: add collected fees back as liquidity
+        try:
+            nft_addr = ARBITRUM_CONTRACTS["uniswap_v3_nft_manager"]
+            if collected0 > 0:
+                self._approve_token(token0, nft_addr, collected0)
+            if collected1 > 0:
+                self._approve_token(token1, nft_addr, collected1)
+
+            deadline = int(time.time()) + 300
+            increase_params = (token_id, collected0, collected1, 0, 0, deadline)
+            tx_func = self.nft_manager.functions.increaseLiquidity(increase_params)
+            self._send_tx(tx_func)
+            print(f"[ARB-LP:{self.label}] Auto-compounded fees into position")
+        except Exception as e:
+            print(f"[ARB-LP:{self.label}] Compound failed (fees kept in wallet): {e}")
 
     def _remove_liquidity(self, token_id: int):
         """Remove all liquidity from position."""
