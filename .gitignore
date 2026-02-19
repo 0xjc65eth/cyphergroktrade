@@ -2,6 +2,7 @@ venv/
 __pycache__/
 *.pyc
 .env
+config.py
 followers.json
 follower_chats.json
 copy_trades_log.json
