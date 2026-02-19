@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: cyphergroktrade
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: HL_PRIVATE_KEY
+        sync: false
+      - key: HL_WALLET_ADDRESS
+        sync: false
+      - key: WITHDRAW_WALLET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: GROK_API_KEY
+        sync: false
