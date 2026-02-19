@@ -37,6 +37,10 @@ UNISWAP_V3_NFT_MANAGER_ABI = [
     {"inputs": [{"components": [{"name": "tokenId", "type": "uint256"}, {"name": "recipient", "type": "address"}, {"name": "amount0Max", "type": "uint128"}, {"name": "amount1Max", "type": "uint128"}], "name": "params", "type": "tuple"}], "name": "collect", "outputs": [{"name": "amount0", "type": "uint256"}, {"name": "amount1", "type": "uint256"}], "stateMutability": "payable", "type": "function"},
     # positions
     {"inputs": [{"name": "tokenId", "type": "uint256"}], "name": "positions", "outputs": [{"name": "nonce", "type": "uint96"}, {"name": "operator", "type": "address"}, {"name": "token0", "type": "address"}, {"name": "token1", "type": "address"}, {"name": "fee", "type": "uint24"}, {"name": "tickLower", "type": "int24"}, {"name": "tickUpper", "type": "int24"}, {"name": "liquidity", "type": "uint128"}, {"name": "feeGrowthInside0LastX128", "type": "uint256"}, {"name": "feeGrowthInside1LastX128", "type": "uint256"}, {"name": "tokensOwed0", "type": "uint128"}, {"name": "tokensOwed1", "type": "uint128"}], "stateMutability": "view", "type": "function"},
+    # balanceOf (ERC721)
+    {"inputs": [{"name": "owner", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+    # tokenOfOwnerByIndex (ERC721Enumerable)
+    {"inputs": [{"name": "owner", "type": "address"}, {"name": "index", "type": "uint256"}], "name": "tokenOfOwnerByIndex", "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"},
 ]
 
 # Uniswap V3 SwapRouter

@@ -150,7 +150,7 @@ class ArbitrumLPManager:
         tx = tx_func.build_transaction({
             "from": self.address,
             "nonce": self.w3.eth.get_transaction_count(self.address),
-            "gas": 500_000,
+            "gas": 800_000,
             "maxFeePerGas": self.w3.eth.gas_price * 2,
             "maxPriorityFeePerGas": self.w3.to_wei(0.01, "gwei"),
             "chainId": self.chain_id,
@@ -161,7 +161,7 @@ class ArbitrumLPManager:
             estimated = self.w3.eth.estimate_gas(tx)
             tx["gas"] = int(estimated * 1.3)
         except Exception:
-            pass  # Use default 500k
+            pass  # Use default 800k
 
         signed = self.w3.eth.account.sign_transaction(tx, self._private_key)
         tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
@@ -238,9 +238,17 @@ class ArbitrumLPManager:
 
         prefer_stables = getattr(config, "ARB_LP_PREFER_STABLES", True)
         alloc = getattr(config, "ARB_LP_ALLOC_USD", 2.50)
+        known_tokens = {k.upper() for k in getattr(config, "ARB_TOKENS", {}).keys()}
 
         scored = []
         for p in pools:
+            # Only consider pools where we know both tokens
+            symbol = p.get("symbol", "")
+            parts = symbol.replace("/", "-").split("-")
+            if len(parts) < 2:
+                continue
+            if parts[0].strip().upper() not in known_tokens or parts[1].strip().upper() not in known_tokens:
+                continue
             # Score components
             apy_score = min(p["apy"] / 100, 1.0)  # Normalize to 0-1
             tvl_score = min(p["tvl"] / 1_000_000, 1.0)  # Higher TVL = more stable
@@ -288,8 +296,13 @@ class ArbitrumLPManager:
             print(f"[ARB-LP:{self.label}] Unknown tokens: {token0_name}={token0_addr}, {token1_name}={token1_addr}")
             return None
 
-        # Try common fee tiers: 100 (0.01%), 500 (0.05%), 3000 (0.30%), 10000 (1%)
-        for fee in [100, 500, 3000, 10000]:
+        # Try fee tiers ordered by likelihood of success.
+        # 500 (0.05%) and 3000 (0.30%) are the most liquid for volatile pairs.
+        # 100 (0.01%) only for stablecoin pairs (tight spacing can cause mint issues).
+        is_stable = token0_name in ("USDC", "USDT", "USDC.e", "DAI") and \
+                    token1_name in ("USDC", "USDT", "USDC.e", "DAI")
+        fee_tiers = [100, 500, 3000, 10000] if is_stable else [500, 3000, 10000, 100]
+        for fee in fee_tiers:
             pool_addr = self.factory.functions.getPool(
                 Web3.to_checksum_address(token0_addr),
                 Web3.to_checksum_address(token1_addr),
@@ -521,14 +534,20 @@ class ArbitrumLPManager:
         tx_func = self.nft_manager.functions.mint(params)
         receipt = self._send_tx(tx_func)
 
-        # Extract tokenId from Transfer event logs
+        # Extract tokenId from Transfer event logs (ERC721 Transfer from 0x0 = mint)
         token_id = None
+        transfer_hash = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        nft_addr_lower = ARBITRUM_CONTRACTS["uniswap_v3_nft_manager"].lower()
         for log in receipt.get("logs", []):
-            if len(log.get("topics", [])) >= 4:
-                # Transfer event: topic[0]=Transfer, topic[1]=from, topic[2]=to, topic[3]=tokenId
-                topic0 = log["topics"][0].hex() if hasattr(log["topics"][0], "hex") else log["topics"][0]
-                if topic0 == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef":
-                    token_id = int(log["topics"][3].hex(), 16) if hasattr(log["topics"][3], "hex") else int(log["topics"][3], 16)
+            topics = log.get("topics", [])
+            log_addr = log.get("address", "").lower()
+            if len(topics) >= 4 and log_addr == nft_addr_lower:
+                t0 = topics[0].hex() if hasattr(topics[0], "hex") else str(topics[0])
+                # .hex() may or may not include 0x prefix depending on web3 version
+                if transfer_hash in t0:
+                    raw = topics[3].hex() if hasattr(topics[3], "hex") else str(topics[3])
+                    raw = raw.replace("0x", "")
+                    token_id = int(raw, 16)
                     break
 
         if token_id:
@@ -648,11 +667,49 @@ class ArbitrumLPManager:
 
         return True
 
+    # ─── Position Recovery ───
+
+    def _recover_existing_positions(self):
+        """Check for existing LP NFT positions owned by this wallet.
+        Restores active_position state if a position with liquidity is found."""
+        try:
+            nft_count = self.nft_manager.functions.balanceOf(self.address).call()
+            if nft_count == 0:
+                return
+            print(f"[ARB-LP:{self.label}] Found {nft_count} existing NFT position(s), checking...")
+            for i in range(nft_count):
+                token_id = self.nft_manager.functions.tokenOfOwnerByIndex(self.address, i).call()
+                pos = self.nft_manager.functions.positions(token_id).call()
+                liquidity = pos[7]
+                if liquidity > 0:
+                    token0 = pos[2]
+                    token1 = pos[3]
+                    fee = pos[4]
+                    pool_addr = self.factory.functions.getPool(
+                        Web3.to_checksum_address(token0),
+                        Web3.to_checksum_address(token1),
+                        fee,
+                    ).call()
+                    self.active_position = {
+                        "token_id": token_id,
+                        "pool": {"symbol": "recovered", "apy": 0, "tvl": 0},
+                        "pool_address": pool_addr,
+                        "entry_time": time.time(),
+                    }
+                    print(f"[ARB-LP:{self.label}] Recovered position #{token_id} (liquidity={liquidity})")
+                    return
+        except Exception as e:
+            print(f"[ARB-LP:{self.label}] Position recovery error: {e}")
+
     # ─── Main Cycle ───
 
     def run_cycle(self):
         """Run one LP management cycle. Called from bot.py main loop."""
         try:
+            # 0. Recover existing positions if we lost state (restart)
+            if not self.active_position:
+                self._recover_existing_positions()
+
             # 1. Check gas availability
             eth_balance = self._get_eth_balance()
             if eth_balance < 0.00005:  # ~$0.10 at $2000/ETH
