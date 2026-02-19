@@ -138,30 +138,58 @@ class CypherGrokTradeBot:
         return config.STOP_LOSS_PCT, config.TAKE_PROFIT_PCT
 
     def _check_profit_withdrawal(self, balance: float):
-        """Send profit to user wallet every WITHDRAW_EVERY_USD."""
+        """Send profit to user wallet or LP based on performance.
+        - Normal: send to user wallet every WITHDRAW_EVERY_USD
+        - When HL >= +200%: bridge profit to Arbitrum LP instead
+        """
         now = time.time()
         if now - self.last_withdraw_check < 60:
             return
         self.last_withdraw_check = now
 
         profit = balance - config.INITIAL_CAPITAL - self.total_withdrawn
-        if profit >= config.WITHDRAW_EVERY_USD:
-            withdraw_amount = int(profit / config.WITHDRAW_EVERY_USD) * config.WITHDRAW_EVERY_USD
+        if profit < config.WITHDRAW_EVERY_USD:
+            return
+
+        pnl_pct = (profit / config.INITIAL_CAPITAL * 100) if config.INITIAL_CAPITAL > 0 else 0
+        withdraw_amount = int(profit / config.WITHDRAW_EVERY_USD) * config.WITHDRAW_EVERY_USD
+
+        # When HL is +200% or more, feed LP instead of user wallet
+        if pnl_pct >= 200 and self.arb_lp:
             try:
-                result = self.executor.exchange.usd_transfer(
-                    withdraw_amount,
-                    config.WITHDRAW_WALLET,
-                )
-                if result.get("status") == "ok":
+                if self.arb_lp._bridge_from_hl(withdraw_amount):
                     self.total_withdrawn += withdraw_amount
-                    print(f"\n  {C.GREEN}{C.BOLD}  PROFIT SENT: ${withdraw_amount:.2f} -> "
-                          f"{config.WITHDRAW_WALLET[:10]}...{C.RESET}")
-                    print(f"  {C.GREEN}Total withdrawn: ${self.total_withdrawn:.2f}{C.RESET}")
-                    self.telegram.withdrawal(withdraw_amount, self.total_withdrawn)
+                    print(f"\n  {C.MAGENTA}{C.BOLD}  PROFIT -> LP: ${withdraw_amount:.2f} bridged to Arbitrum "
+                          f"(HL +{pnl_pct:.0f}%){C.RESET}")
+                    self.telegram.send(
+                        f"LP FEED: ${withdraw_amount:.2f} bridged to Arbitrum LP (HL +{pnl_pct:.0f}%)"
+                    )
                 else:
-                    print(f"  {C.YELLOW}[WITHDRAW] Failed: {result}{C.RESET}")
+                    print(f"  {C.YELLOW}[LP-FEED] Bridge failed, falling back to wallet{C.RESET}")
+                    self._withdraw_to_wallet(withdraw_amount)
             except Exception as e:
-                print(f"  {C.YELLOW}[WITHDRAW] Error: {e}{C.RESET}")
+                print(f"  {C.YELLOW}[LP-FEED] Error: {e}, falling back to wallet{C.RESET}")
+                self._withdraw_to_wallet(withdraw_amount)
+        else:
+            self._withdraw_to_wallet(withdraw_amount)
+
+    def _withdraw_to_wallet(self, amount: float):
+        """Send profit to user wallet."""
+        try:
+            result = self.executor.exchange.usd_transfer(
+                amount,
+                config.WITHDRAW_WALLET,
+            )
+            if result.get("status") == "ok":
+                self.total_withdrawn += amount
+                print(f"\n  {C.GREEN}{C.BOLD}  PROFIT SENT: ${amount:.2f} -> "
+                      f"{config.WITHDRAW_WALLET[:10]}...{C.RESET}")
+                print(f"  {C.GREEN}Total withdrawn: ${self.total_withdrawn:.2f}{C.RESET}")
+                self.telegram.withdrawal(amount, self.total_withdrawn)
+            else:
+                print(f"  {C.YELLOW}[WITHDRAW] Failed: {result}{C.RESET}")
+        except Exception as e:
+            print(f"  {C.YELLOW}[WITHDRAW] Error: {e}{C.RESET}")
 
     def _run_mm_cycle(self, reason: str = "scheduled"):
         """Run a market making cycle."""

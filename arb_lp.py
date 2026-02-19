@@ -817,21 +817,16 @@ class ArbitrumLPManager:
 
             # 2. If no active position, discover and enter
             if not self.active_position:
-                # Check if we have enough funds on Arbitrum, bridge from HL if not
-                alloc = getattr(config, "ARB_LP_ALLOC_USD", 2.50)
+                alloc = getattr(config, "ARB_LP_ALLOC_USD", 5.00)
                 arb_usd = self._get_arb_total_usd()
                 print(f"[ARB-LP:{self.label}] Arbitrum balance: ~${arb_usd:.2f} (target: ${alloc:.2f})")
 
-                if arb_usd < alloc * 0.5:
-                    # Need to bridge from Hyperliquid
-                    bridge_amount = alloc + 1.0  # Extra $1 for gas/swaps
-                    print(f"[ARB-LP:{self.label}] Low Arbitrum balance, bridging ${bridge_amount:.2f} from Hyperliquid...")
-                    if self._bridge_from_hl(bridge_amount):
-                        # USDC takes ~2 min to arrive, skip this cycle
-                        print(f"[ARB-LP:{self.label}] Bridge initiated, will use funds next cycle")
-                        return
-                    else:
-                        print(f"[ARB-LP:{self.label}] Bridge failed, using available balance")
+                if arb_usd < 0.10:
+                    print(f"[ARB-LP:{self.label}] No funds on Arbitrum, skipping LP cycle")
+                    return
+
+                # Use what's available, cap at alloc
+                alloc = min(alloc, arb_usd * 0.85)  # Keep 15% for gas
 
                 pools = self._fetch_pool_yields()
                 if not pools:

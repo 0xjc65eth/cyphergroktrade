@@ -474,6 +474,11 @@ class CopyTradingManager:
             max_risk = follower.get("max_risk_pct", 0.10)
             max_pos = follower.get("max_positions", 10)
 
+            # Capital allocation: only use SCALP portion for perp trading
+            import config as cfg
+            scalp_pct = getattr(cfg, "COPY_ALLOC_SCALP_PCT", 0.25)
+            scalp_balance = follower_balance * scalp_pct  # 25% for scalp
+
             # === CLOSE positions that master closed ===
             for coin, f_size in follower_positions.items():
                 if coin not in master_positions:
@@ -495,7 +500,7 @@ class CopyTradingManager:
                     break
 
                 target_pct = min(master_pos["size_pct"] * multiplier, max_risk)
-                target_notional = follower_balance * target_pct
+                target_notional = scalp_balance * target_pct  # Use only scalp allocation
 
                 try:
                     mid_price = float(self.info.all_mids().get(coin, 0))
