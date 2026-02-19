@@ -207,6 +207,8 @@ class ArbitrumLPManager:
     def _token_value_usd(self, token_address: str, raw_amount: int) -> float:
         """Estimate USD value of a raw token amount."""
         human = self._token_to_human(raw_amount, token_address)
+        if human == 0:
+            return 0
         addr_lower = token_address.lower()
         tokens = getattr(config, "ARB_TOKENS", {})
         # Stablecoins: 1:1
@@ -215,10 +217,39 @@ class ArbitrumLPManager:
             return human
         # WETH or native ETH
         weth_lower = ARBITRUM_CONTRACTS["weth"].lower()
+        eth_price = self._get_eth_price()
         if addr_lower == weth_lower:
-            return human * self._get_eth_price()
-        # Other tokens: rough estimate via amount (conservative)
-        return human * 0.01  # Unknown token, assume low value
+            return human * eth_price
+        # Other tokens: try to get price via WETH pool on Uniswap V3
+        try:
+            for fee in [3000, 10000, 500]:
+                pool_addr = self.factory.functions.getPool(
+                    Web3.to_checksum_address(token_address),
+                    Web3.to_checksum_address(ARBITRUM_CONTRACTS["weth"]),
+                    fee,
+                ).call()
+                if pool_addr != "0x0000000000000000000000000000000000000000":
+                    pool = self.w3.eth.contract(
+                        address=Web3.to_checksum_address(pool_addr),
+                        abi=UNISWAP_V3_POOL_ABI,
+                    )
+                    slot0 = pool.functions.slot0().call()
+                    sqrt_price = slot0[0]
+                    token0_addr = pool.functions.token0().call().lower()
+                    dec_token = self._get_token_decimals(token_address)
+                    dec_weth = 18
+                    price_ratio = (sqrt_price / (2 ** 96)) ** 2
+                    if addr_lower == token0_addr:
+                        # price = token1/token0 = WETH per token
+                        eth_per_token = price_ratio * (10 ** dec_token) / (10 ** dec_weth)
+                    else:
+                        # price = token0/token1 = token per WETH, invert
+                        eth_per_token = (1 / price_ratio) * (10 ** dec_token) / (10 ** dec_weth) if price_ratio > 0 else 0
+                    return human * eth_per_token * eth_price
+        except Exception:
+            pass
+        # Fallback: assume $1 per token (better than $0.01)
+        return human * 1.0
 
     def _estimate_gas_cost_usd(self, gas_estimate: int) -> float:
         """Estimate gas cost in USD."""
@@ -686,7 +717,16 @@ class ArbitrumLPManager:
         token0 = pos.get("token0")
         token1 = pos.get("token1")
         if not token0 or not token1:
-            return False
+            # Try to read from on-chain position
+            try:
+                on_chain = self.nft_manager.functions.positions(pos["token_id"]).call()
+                token0 = on_chain[2]
+                token1 = on_chain[3]
+                pos["token0"] = token0
+                pos["token1"] = token1
+            except Exception:
+                print(f"[ARB-LP:{self.label}] Cannot read position tokens for increase")
+                return False
 
         token_id = pos["token_id"]
         bal0 = self._get_token_balance(token0)
@@ -697,7 +737,12 @@ class ArbitrumLPManager:
         t1_usd = self._token_value_usd(token1, bal1)
         total_usd = t0_usd + t1_usd
 
+        t0_name = self._addr_to_token_name(token0) or token0[:10]
+        t1_name = self._addr_to_token_name(token1) or token1[:10]
+        print(f"[ARB-LP:{self.label}] Free tokens: {t0_name}=${t0_usd:.4f} {t1_name}=${t1_usd:.4f} (total=${total_usd:.4f})")
+
         if total_usd < 0.30:
+            print(f"[ARB-LP:{self.label}] Skipping increase: free tokens < $0.30")
             return False
 
         # Approve tokens
