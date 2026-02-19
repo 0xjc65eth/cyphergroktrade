@@ -1,7 +1,42 @@
 {
-  "coin_stats": {},
+  "coin_stats": {
+    "PUMP": {
+      "wins": 0,
+      "losses": 1,
+      "total_pnl": -1.064826,
+      "win_rate": 0.0
+    },
+    "LIT": {
+      "wins": 0,
+      "losses": 1,
+      "total_pnl": -2.044504,
+      "win_rate": 0.0
+    },
+    "SPX": {
+      "wins": 0,
+      "losses": 1,
+      "total_pnl": -2.316656,
+      "win_rate": 0.0
+    }
+  },
   "signal_stats": {},
-  "timeframe_stats": {},
+  "timeframe_stats": {
+    "2": {
+      "wins": 0,
+      "losses": 1,
+      "win_rate": 0.0
+    },
+    "4": {
+      "wins": 0,
+      "losses": 1,
+      "win_rate": 0.0
+    },
+    "11": {
+      "wins": 0,
+      "losses": 1,
+      "win_rate": 0.0
+    }
+  },
   "grok_accuracy": {},
   "avoid_patterns": [],
   "prefer_patterns": []

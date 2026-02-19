@@ -31,6 +31,7 @@ from mm_spot import SpotMarketMaker
 from telegram_bot import TelegramNotifier
 from trade_logger import TradeLogger
 from copy_trading import CopyTradingManager
+from arb_lp import ArbitrumLPManager
 
 
 class C:
@@ -66,6 +67,7 @@ class CypherGrokTradeBot:
         self.telegram = TelegramNotifier()
         self.logger = TradeLogger()
         self.copy_manager = CopyTradingManager(config.HL_WALLET_ADDRESS)
+        self.arb_lp = ArbitrumLPManager() if getattr(config, 'ARB_LP_ENABLED', False) else None
 
         self.running = False
         self.start_balance = 0
@@ -75,6 +77,7 @@ class CypherGrokTradeBot:
         self.consecutive_losses = 0
         self.cooldown_until = None
         self.last_mm_refresh = 0
+        self.last_arb_lp_refresh = 0
         self.last_withdraw_check = 0
         self.total_withdrawn = 0.0
         self.idle_scans = 0  # Track scans with no futures entry
@@ -171,6 +174,17 @@ class CypherGrokTradeBot:
         except Exception as e:
             print(f"  {C.RED}[MM] Error: {e}{C.RESET}")
 
+    def _run_arb_lp_cycle(self, reason: str = "scheduled"):
+        """Run an Arbitrum LP management cycle."""
+        if not self.arb_lp or not getattr(config, 'ARB_LP_ENABLED', False):
+            return
+        try:
+            print(f"\n  {C.CYAN}[ARB-LP] Running cycle ({reason})...{C.RESET}")
+            self.arb_lp.run_cycle()
+            self.last_arb_lp_refresh = time.time()
+        except Exception as e:
+            print(f"  {C.RED}[ARB-LP] Error: {e}{C.RESET}")
+
     def start(self):
         """Main entry point."""
         self.banner()
@@ -199,6 +213,8 @@ class CypherGrokTradeBot:
               f"5M+15M Filter: ON | Max Positions: {config.MAX_OPEN_POSITIONS}")
         print(f"{C.BOLD}[INIT]{C.RESET} MM Fallback: {'ON' if config.MM_FALLBACK_ENABLED else 'OFF'} | "
               f"MM Pairs: {', '.join(config.MM_PAIRS)}")
+        print(f"{C.BOLD}[INIT]{C.RESET} Arbitrum LP: {'ON' if getattr(config, 'ARB_LP_ENABLED', False) else 'OFF'}"
+              f" | Alloc: ${getattr(config, 'ARB_LP_ALLOC_USD', 0)}")
         print(f"{C.BOLD}[INIT]{C.RESET} Profit Withdrawal: ${config.WITHDRAW_EVERY_USD} -> {config.WITHDRAW_WALLET[:12]}...")
         learn_summary = self.logger.get_summary()
         print(f"{C.BOLD}[LEARN]{C.RESET} {learn_summary}")
@@ -582,6 +598,12 @@ class CypherGrokTradeBot:
                     if now_ts - self.last_mm_refresh >= config.MM_REFRESH_INTERVAL:
                         self._run_mm_cycle("scheduled")
 
+                # Arbitrum LP management
+                if self.arb_lp and getattr(config, 'ARB_LP_ENABLED', False):
+                    now_ts = time.time()
+                    if now_ts - self.last_arb_lp_refresh >= getattr(config, 'ARB_LP_REFRESH_INTERVAL', 300):
+                        self._run_arb_lp_cycle("scheduled")
+
                 time.sleep(config.SCAN_INTERVAL)
 
             except KeyboardInterrupt:
@@ -602,6 +624,9 @@ class CypherGrokTradeBot:
         """Graceful shutdown."""
         print(f"\n{C.YELLOW}{C.BOLD}[SHUTDOWN] Closing positions and stopping...{C.RESET}")
         self.running = False
+        if self.arb_lp:
+            print(f"  [ARB-LP] Removing liquidity positions...")
+            self.arb_lp.shutdown()
         if self.mm:
             print(f"  [MM] Cancelling all spot orders...")
             self.mm.cancel_all_orders()
