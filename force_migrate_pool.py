@@ -114,7 +114,11 @@ def main():
 
     # ─── STEP 1: Find and remove ALL LP positions ───
     print("\n--- STEP 1: Remove ALL LP positions ---")
-    nft_count = nft_mgr.functions.balanceOf(addr).call()
+    try:
+        nft_count = nft_mgr.functions.balanceOf(addr).call()
+    except Exception as e:
+        print(f"Could not read NFT count: {e}")
+        nft_count = 0
     print(f"Found {nft_count} NFT position(s)")
 
     for i in range(nft_count):
@@ -208,12 +212,20 @@ def main():
     for token_name, token_addr in tokens.items():
         if token_addr.lower() in (weth_addr.lower(), usdc_addr.lower()):
             continue
-        bal = get_balance(token_addr)
+        try:
+            bal = get_balance(token_addr)
+        except Exception as e:
+            print(f"\n{token_name}: SKIP (balanceOf failed: {e})")
+            continue
         if bal == 0:
             continue
         # Quick USD estimate
-        token_c = w3.eth.contract(address=Web3.to_checksum_address(token_addr), abi=ERC20_ABI)
-        decimals = token_c.functions.decimals().call()
+        try:
+            token_c = w3.eth.contract(address=Web3.to_checksum_address(token_addr), abi=ERC20_ABI)
+            decimals = token_c.functions.decimals().call()
+        except Exception as e:
+            print(f"\n{token_name}: SKIP (decimals() failed: {e})")
+            continue
         human_bal = bal / (10 ** decimals)
         print(f"\n{token_name}: {human_bal:.6f} (raw={bal})")
         if human_bal < 0.000001:
