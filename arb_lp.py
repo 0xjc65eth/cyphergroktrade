@@ -75,6 +75,7 @@ class ArbitrumLPManager:
         # State
         self.active_position = None  # {token_id, pool, entry_time, tick_lower, tick_upper}
         self.last_fee_collection = 0
+        self._oor_since = None  # Timestamp when position first went out of range
         self._pool_cache = None
         self._pool_cache_time = 0
         self._token_decimals_cache = {}
@@ -463,6 +464,21 @@ class ArbitrumLPManager:
         print(f"[ARB-LP:{self.label}] No Uniswap V3 pool found for {token0_name}/{token1_name}")
         return None
 
+    # ─── Target Pool Resolution ───
+
+    def _resolve_target_pool(self, target: str = "WETH-USDC") -> dict | None:
+        """Resolve a specific target pool (e.g. 'WETH-USDC') to on-chain addresses.
+
+        This bypasses the DeFiLlama scoring and directly resolves the pool.
+        Used for forced pool targeting (config.ARB_LP_TARGET_POOL).
+        """
+        pool_info = {"symbol": target}
+        resolved = self._resolve_pool_tokens(pool_info)
+        if resolved:
+            print(f"[ARB-LP:{self.label}] Resolved target pool {target}: "
+                  f"{resolved['token0_name']}/{resolved['token1_name']} fee={resolved['fee']}")
+        return resolved
+
     # ─── Tick Math ───
 
     def _price_to_tick(self, price: float) -> int:
@@ -553,6 +569,99 @@ class ArbitrumLPManager:
         receipt = self._send_tx(tx_func)
         print(f"[ARB-LP:{self.label}] Swapped tokens (tx: {receipt['transactionHash'].hex()[:12]}...)")
         return 0  # Actual amount from logs, but we check balance after
+
+    def _convert_all_to_pool_tokens(self, pool_resolved: dict):
+        """Convert ALL non-pool tokens in wallet to pool tokens (WETH + USDC).
+
+        Scans every token in ARB_TOKENS config. Any token that is NOT one of
+        the two pool tokens gets swapped into WETH (easiest route for most tokens).
+        Then wraps any native ETH (keeping a small gas reserve).
+
+        This ensures maximum capital goes into the LP position.
+        """
+        tokens = getattr(config, "ARB_TOKENS", {})
+        weth = ARBITRUM_CONTRACTS["weth"]
+        pool_token0 = pool_resolved["token0"].lower()
+        pool_token1 = pool_resolved["token1"].lower()
+
+        # 1. Wrap native ETH first (keep gas reserve)
+        eth_balance = self._get_eth_balance()
+        gas_reserve = 0.0003  # ~$0.60 at $2000/ETH — enough for several txs
+        wrappable = eth_balance - gas_reserve
+        if wrappable > 0.00005:
+            print(f"[ARB-LP:{self.label}] Wrapping {wrappable:.6f} ETH -> WETH (keeping {gas_reserve} for gas)")
+            self._wrap_eth(wrappable)
+
+        # 2. Swap ALL non-pool tokens to WETH (best liquidity route)
+        target_token = weth  # Most tokens have WETH pairs with deep liquidity
+        for token_name, token_addr in tokens.items():
+            addr_lower = token_addr.lower()
+
+            # Skip if it's already a pool token
+            if addr_lower == pool_token0 or addr_lower == pool_token1:
+                continue
+
+            # Check balance
+            raw_bal = self._get_token_balance(token_addr)
+            if raw_bal == 0:
+                continue
+
+            usd_val = self._token_value_usd(token_addr, raw_bal)
+            if usd_val < 0.20:  # Not worth swapping dust < $0.20
+                continue
+
+            # Determine best fee tier for swap (try 3000 first, then 10000, then 500)
+            for fee in [3000, 10000, 500]:
+                try:
+                    pool_addr = self.factory.functions.getPool(
+                        Web3.to_checksum_address(token_addr),
+                        Web3.to_checksum_address(target_token),
+                        fee,
+                    ).call()
+                    if pool_addr != "0x0000000000000000000000000000000000000000":
+                        print(f"[ARB-LP:{self.label}] Converting {token_name} (${usd_val:.2f}) -> WETH (fee={fee})")
+                        self._swap_for_tokens(token_addr, target_token, raw_bal, fee)
+                        break
+                except Exception as e:
+                    print(f"[ARB-LP:{self.label}] Failed to swap {token_name}: {e}")
+                    continue
+
+        # 3. Now we should have WETH + USDC. If pool is WETH-USDC, ensure 50/50 split
+        weth_bal = self._get_token_balance(weth)
+        weth_usd = self._token_value_usd(weth, weth_bal)
+
+        # Find which pool token is USDC and which is WETH
+        usdc_addr = tokens.get("USDC", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831")
+        usdc_bal = self._get_token_balance(usdc_addr)
+        usdc_usd = self._token_value_usd(usdc_addr, usdc_bal)
+
+        total_usd = weth_usd + usdc_usd
+        print(f"[ARB-LP:{self.label}] After conversion: WETH=${weth_usd:.2f} USDC=${usdc_usd:.2f} Total=${total_usd:.2f}")
+
+        # Swap half of the dominant token to get a ~50/50 split
+        if weth_usd > usdc_usd * 1.5 and weth_bal > 0:
+            # Too much WETH, swap ~half to USDC
+            swap_amount = weth_bal // 2
+            if swap_amount > 0:
+                print(f"[ARB-LP:{self.label}] Balancing: swapping ~50% WETH -> USDC")
+                try:
+                    self._swap_for_tokens(weth, usdc_addr, swap_amount, pool_resolved.get("fee", 500))
+                except Exception as e:
+                    print(f"[ARB-LP:{self.label}] Balance swap WETH->USDC failed: {e}")
+        elif usdc_usd > weth_usd * 1.5 and usdc_bal > 0:
+            # Too much USDC, swap ~half to WETH
+            swap_amount = usdc_bal // 2
+            if swap_amount > 0:
+                print(f"[ARB-LP:{self.label}] Balancing: swapping ~50% USDC -> WETH")
+                try:
+                    self._swap_for_tokens(usdc_addr, weth, swap_amount, pool_resolved.get("fee", 500))
+                except Exception as e:
+                    print(f"[ARB-LP:{self.label}] Balance swap USDC->WETH failed: {e}")
+
+        # Final state
+        final_weth = self._token_value_usd(weth, self._get_token_balance(weth))
+        final_usdc = self._token_value_usd(usdc_addr, self._get_token_balance(usdc_addr))
+        print(f"[ARB-LP:{self.label}] Final split: WETH=${final_weth:.2f} USDC=${final_usdc:.2f}")
 
     def _ensure_tokens(self, pool_resolved: dict, alloc_usd: float):
         """Ensure we have both tokens for the pool. Split allocation 50/50."""
@@ -962,16 +1071,31 @@ class ArbitrumLPManager:
             print(f"[ARB-LP:{self.label}] Error removing liquidity: {e}")
 
     def _should_rebalance(self, status: dict) -> bool:
-        """Determine if position needs rebalancing."""
+        """Determine if position needs rebalancing.
+
+        Tracks the actual time the position has been OUT OF RANGE (not entry time).
+        Only rebalances after ARB_LP_REBALANCE_AFTER_OOR_MIN minutes continuously OOR.
+        """
         if status.get("in_range", True):
+            # Position is back in range, reset OOR timer
+            self._oor_since = None
             return False
 
-        # Check how long we've been out of range
-        entry_time = self.active_position.get("entry_time", time.time())
-        oor_threshold = getattr(config, "ARB_LP_REBALANCE_AFTER_OOR_MIN", 30) * 60
+        # Position is out of range — start tracking OOR time if not already
+        now = time.time()
+        if self._oor_since is None:
+            self._oor_since = now
+            print(f"[ARB-LP:{self.label}] Position went OUT OF RANGE, starting OOR timer")
+            return False
 
-        if time.time() - entry_time < oor_threshold:
-            return False  # Give it time
+        # Check how long we've been continuously out of range
+        oor_threshold = getattr(config, "ARB_LP_REBALANCE_AFTER_OOR_MIN", 30) * 60
+        oor_duration = now - self._oor_since
+
+        if oor_duration < oor_threshold:
+            remaining_min = (oor_threshold - oor_duration) / 60
+            print(f"[ARB-LP:{self.label}] OOR for {oor_duration/60:.1f}min, rebalance in {remaining_min:.1f}min")
+            return False
 
         # Check if gas cost is reasonable
         gas_cost = self._estimate_gas_cost_usd(500_000)  # Remove + new mint
@@ -982,6 +1106,7 @@ class ArbitrumLPManager:
             print(f"[ARB-LP:{self.label}] Rebalance gas too high: ${gas_cost:.4f}")
             return False
 
+        print(f"[ARB-LP:{self.label}] OOR for {oor_duration/60:.1f}min (threshold: {oor_threshold/60:.0f}min) -> REBALANCING")
         return True
 
     # ─── Position Recovery ───
@@ -1054,47 +1179,40 @@ class ArbitrumLPManager:
 
             print(f"[ARB-LP:{self.label}] ETH balance: {eth_balance:.6f} (~${eth_balance * self._get_eth_price():.2f})")
 
-            # 2. If no active position, discover and enter
+            # 2. If no active position, convert ALL tokens and enter target pool
             if not self.active_position:
-                alloc = getattr(config, "ARB_LP_ALLOC_USD", 5.00)
                 arb_usd = self._get_arb_total_usd()
-                print(f"[ARB-LP:{self.label}] Arbitrum balance: ~${arb_usd:.2f} (target: ${alloc:.2f})")
+                print(f"[ARB-LP:{self.label}] Arbitrum total balance: ~${arb_usd:.2f}")
 
                 if arb_usd < 0.50:
                     print(f"[ARB-LP:{self.label}] Insufficient funds on Arbitrum (need >$0.50), skipping")
                     return
 
-                # Use what's available, cap at alloc
-                alloc = min(alloc, arb_usd * 0.85)  # Keep 15% for gas
+                # Use target pool directly (no more DeFiLlama scoring)
+                target_pool = getattr(config, "ARB_LP_TARGET_POOL", "WETH-USDC")
+                print(f"[ARB-LP:{self.label}] Target pool: {target_pool}")
 
-                pools = self._fetch_pool_yields()
-                if not pools:
-                    print(f"[ARB-LP:{self.label}] No pools found meeting criteria")
-                    return
-
-                best = self._select_best_pool(pools)
-                if not best:
-                    print(f"[ARB-LP:{self.label}] No suitable pool found")
-                    return
-
-                # Resolve to on-chain addresses
-                resolved = self._resolve_pool_tokens(best)
+                resolved = self._resolve_target_pool(target_pool)
                 if not resolved:
+                    print(f"[ARB-LP:{self.label}] Could not resolve target pool {target_pool}")
                     return
 
-                self._ensure_tokens(resolved, alloc)
+                # Convert ALL tokens in wallet to pool tokens (WETH + USDC)
+                print(f"[ARB-LP:{self.label}] Converting ALL tokens to pool tokens...")
+                self._convert_all_to_pool_tokens(resolved)
 
                 token_id = self._add_liquidity(resolved)
                 if token_id:
+                    pool_info = {"symbol": target_pool, "apy": 0, "tvl": 0, "fee": resolved["fee"]}
                     self.active_position = {
                         "token_id": token_id,
-                        "pool": best,
+                        "pool": pool_info,
                         "pool_address": resolved["pool_address"],
                         "token0": resolved["token0"],
                         "token1": resolved["token1"],
                         "entry_time": time.time(),
                     }
-                    print(f"[ARB-LP:{self.label}] Position active: {best['symbol']} (APY: {best['apy']:.1f}%)")
+                    print(f"[ARB-LP:{self.label}] Position active in {target_pool} (fee tier: {resolved['fee']})")
                 return
 
             # 3. Monitor existing position
@@ -1118,12 +1236,44 @@ class ArbitrumLPManager:
                 if time.time() - self.last_fee_collection >= fee_interval:
                     self._collect_fees(self.active_position["token_id"])
 
-            # 5. Rebalance if needed
+            # 5. Rebalance if needed — remove old position and IMMEDIATELY remint
             if self._should_rebalance(status):
                 print(f"[ARB-LP:{self.label}] Rebalancing position (out of range)")
                 self._remove_liquidity(self.active_position["token_id"])
                 self.active_position = None
-                # Next cycle will re-enter with fresh pool selection
+                self._oor_since = None  # Reset OOR timer
+
+                # === IMMEDIATE REMINT: don't wait for next cycle ===
+                print(f"[ARB-LP:{self.label}] Reminting position immediately after rebalance...")
+                try:
+                    arb_usd = self._get_arb_total_usd()
+                    if arb_usd >= 0.50:
+                        # Force ETH/USDC pool (configured target)
+                        target_pool = getattr(config, "ARB_LP_TARGET_POOL", "WETH-USDC")
+                        resolved = self._resolve_target_pool(target_pool)
+
+                        if resolved:
+                            self._convert_all_to_pool_tokens(resolved)
+                            token_id = self._add_liquidity(resolved)
+                            if token_id:
+                                pool_info = {"symbol": target_pool, "apy": 0, "tvl": 0, "fee": resolved["fee"]}
+                                self.active_position = {
+                                    "token_id": token_id,
+                                    "pool": pool_info,
+                                    "pool_address": resolved["pool_address"],
+                                    "token0": resolved["token0"],
+                                    "token1": resolved["token1"],
+                                    "entry_time": time.time(),
+                                }
+                                print(f"[ARB-LP:{self.label}] Reminted! New position #{token_id} in {target_pool}")
+                            else:
+                                print(f"[ARB-LP:{self.label}] Remint failed, will retry next cycle")
+                        else:
+                            print(f"[ARB-LP:{self.label}] Could not resolve {target_pool}, will retry next cycle")
+                    else:
+                        print(f"[ARB-LP:{self.label}] Insufficient funds (${arb_usd:.2f}) for remint")
+                except Exception as e:
+                    print(f"[ARB-LP:{self.label}] Remint error: {e}, will retry next cycle")
 
         except Exception as e:
             err_str = str(e)
