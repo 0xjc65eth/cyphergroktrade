@@ -1043,32 +1043,33 @@ class ArbitrumLPManager:
         except Exception as e:
             print(f"[ARB-LP:{self.label}] Compound failed (fees kept in wallet): {e}")
 
-    def _remove_liquidity(self, token_id: int):
-        """Remove all liquidity from position."""
-        try:
-            pos = self.nft_manager.functions.positions(token_id).call()
-            liquidity = pos[7]
+    def _remove_liquidity(self, token_id: int) -> bool:
+        """Remove all liquidity from position. Returns True if successful.
+        RAISES exception on failure (caller must handle)."""
+        pos = self.nft_manager.functions.positions(token_id).call()
+        liquidity = pos[7]
 
-            if liquidity == 0:
-                print(f"[ARB-LP:{self.label}] Position {token_id} has no liquidity")
-                return
+        if liquidity == 0:
+            print(f"[ARB-LP:{self.label}] Position {token_id} has no liquidity")
+            return True  # Nothing to remove, success
 
-            deadline = int(time.time()) + 300
-            params = (token_id, liquidity, 0, 0, deadline)
+        deadline = int(time.time()) + 600  # 10 min deadline for safety
+        params = (token_id, liquidity, 0, 0, deadline)
 
-            print(f"[ARB-LP:{self.label}] Removing liquidity from position {token_id}...")
-            tx_func = self.nft_manager.functions.decreaseLiquidity(params)
-            self._send_tx(tx_func)
+        print(f"[ARB-LP:{self.label}] Removing liquidity from position {token_id} (liq={liquidity})...")
+        tx_func = self.nft_manager.functions.decreaseLiquidity(params)
+        receipt = self._send_tx(tx_func)
+        print(f"[ARB-LP:{self.label}] decreaseLiquidity OK (tx: {receipt['transactionHash'].hex()[:12]}...)")
 
-            # Collect remaining tokens
-            max_uint128 = 2 ** 128 - 1
-            collect_params = (token_id, self.address, max_uint128, max_uint128)
-            tx_func = self.nft_manager.functions.collect(collect_params)
-            self._send_tx(tx_func)
+        # Collect remaining tokens
+        max_uint128 = 2 ** 128 - 1
+        collect_params = (token_id, self.address, max_uint128, max_uint128)
+        tx_func = self.nft_manager.functions.collect(collect_params)
+        receipt = self._send_tx(tx_func)
+        print(f"[ARB-LP:{self.label}] collect OK (tx: {receipt['transactionHash'].hex()[:12]}...)")
 
-            print(f"[ARB-LP:{self.label}] Liquidity removed and tokens collected")
-        except Exception as e:
-            print(f"[ARB-LP:{self.label}] Error removing liquidity: {e}")
+        print(f"[ARB-LP:{self.label}] Liquidity removed and tokens collected successfully")
+        return True
 
     def _should_rebalance(self, status: dict) -> bool:
         """Determine if position needs rebalancing.
@@ -1177,33 +1178,41 @@ class ArbitrumLPManager:
             if not self.active_position:
                 self._recover_existing_positions()
 
-            # 0b. If recovered position is NOT in the target pool, dismantle it
-            #     This handles migration from old pools (e.g. ZRO/WETH -> ETH/USDC)
+            # 0b. If recovered position is NOT in the target pool, dismantle ALL positions
+            #     and migrate to target pool (e.g. ZRO/WETH -> ETH/USDC)
             if self.active_position:
                 target_pool = getattr(config, "ARB_LP_TARGET_POOL", "WETH-USDC")
                 current_symbol = self.active_position.get("pool", {}).get("symbol", "")
-                # Normalize: "ZRO-WETH" vs target "WETH-USDC"
                 target_parts = set(target_pool.upper().replace("/", "-").split("-"))
                 current_parts = set(current_symbol.upper().replace("/", "-").split("-"))
 
                 if current_parts and current_parts != target_parts:
                     print(f"[ARB-LP:{self.label}] *** POOL MIGRATION ***")
-                    print(f"[ARB-LP:{self.label}] Current: {current_symbol} ({current_parts})")
-                    print(f"[ARB-LP:{self.label}] Target:  {target_pool} ({target_parts})")
-                    print(f"[ARB-LP:{self.label}] DISMANTLING old position to migrate...")
-                    token_id = self.active_position.get("token_id")
-                    if token_id:
-                        # Remove all liquidity (decreaseLiquidity + collect)
-                        # Skip fee compound — we want tokens in wallet, not back in old position
-                        try:
-                            self._remove_liquidity(token_id)
-                            print(f"[ARB-LP:{self.label}] Old position #{token_id} dismantled successfully")
-                        except Exception as e:
-                            print(f"[ARB-LP:{self.label}] ERROR dismantling position #{token_id}: {e}")
-                            # Force clear state anyway so next cycle retries
-                    self.active_position = None
-                    self._oor_since = None
-                    print(f"[ARB-LP:{self.label}] State cleared, will mount {target_pool} now")
+                    print(f"[ARB-LP:{self.label}] Current: {current_symbol} -> Target: {target_pool}")
+
+                    # Dismantle ALL positions with liquidity (not just active one)
+                    dismantled_ok = True
+                    try:
+                        nft_count = self.nft_manager.functions.balanceOf(self.address).call()
+                        for i in range(nft_count):
+                            tid = self.nft_manager.functions.tokenOfOwnerByIndex(self.address, i).call()
+                            pos_data = self.nft_manager.functions.positions(tid).call()
+                            liq = pos_data[7]
+                            if liq > 0:
+                                print(f"[ARB-LP:{self.label}] Removing position #{tid} (liq={liq})...")
+                                self._remove_liquidity(tid)
+                    except Exception as e:
+                        print(f"[ARB-LP:{self.label}] MIGRATION FAILED: {e}")
+                        dismantled_ok = False
+
+                    if dismantled_ok:
+                        self.active_position = None
+                        self._oor_since = None
+                        print(f"[ARB-LP:{self.label}] All old positions dismantled, mounting {target_pool}")
+                    else:
+                        # DON'T clear active_position — tx failed, liquidity still locked
+                        print(f"[ARB-LP:{self.label}] Keeping old position active (dismantle failed)")
+                        return  # Abort this cycle, retry next time
 
             # 1. Check gas availability
             eth_balance = self._get_eth_balance()
@@ -1273,7 +1282,11 @@ class ArbitrumLPManager:
             # 5. Rebalance if needed — remove old position and IMMEDIATELY remint
             if self._should_rebalance(status):
                 print(f"[ARB-LP:{self.label}] Rebalancing position (out of range)")
-                self._remove_liquidity(self.active_position["token_id"])
+                try:
+                    self._remove_liquidity(self.active_position["token_id"])
+                except Exception as e:
+                    print(f"[ARB-LP:{self.label}] Rebalance remove failed: {e}")
+                    return  # Abort, retry next cycle
                 self.active_position = None
                 self._oor_since = None  # Reset OOR timer
 
