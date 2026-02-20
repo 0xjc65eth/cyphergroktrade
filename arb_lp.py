@@ -1171,6 +1171,31 @@ class ArbitrumLPManager:
             if not self.active_position:
                 self._recover_existing_positions()
 
+            # 0b. If recovered position is NOT in the target pool, dismantle it
+            #     This handles migration from old pools (e.g. ZRO/WETH -> ETH/USDC)
+            if self.active_position:
+                target_pool = getattr(config, "ARB_LP_TARGET_POOL", "WETH-USDC")
+                current_symbol = self.active_position.get("pool", {}).get("symbol", "")
+                # Normalize: "ZRO-WETH" vs target "WETH-USDC"
+                target_parts = set(target_pool.upper().replace("/", "-").split("-"))
+                current_parts = set(current_symbol.upper().replace("/", "-").split("-"))
+
+                if current_parts and current_parts != target_parts:
+                    print(f"[ARB-LP:{self.label}] Current pool {current_symbol} != target {target_pool}")
+                    print(f"[ARB-LP:{self.label}] DISMANTLING old position to migrate to {target_pool}...")
+                    token_id = self.active_position.get("token_id")
+                    if token_id:
+                        # Collect any pending fees first
+                        try:
+                            self._collect_fees(token_id)
+                        except Exception as e:
+                            print(f"[ARB-LP:{self.label}] Fee collection before migration failed: {e}")
+                        # Remove all liquidity
+                        self._remove_liquidity(token_id)
+                    self.active_position = None
+                    self._oor_since = None
+                    print(f"[ARB-LP:{self.label}] Old position dismantled, proceeding to mount {target_pool}")
+
             # 1. Check gas availability
             eth_balance = self._get_eth_balance()
             if eth_balance < 0.00005:  # ~$0.10 at $2000/ETH
