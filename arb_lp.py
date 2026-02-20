@@ -1122,29 +1122,33 @@ class ArbitrumLPManager:
     def _recover_existing_positions(self):
         """Check for existing LP NFT positions owned by this wallet.
         Restores active_position state if a position with liquidity is found.
+        Logs ALL positions found for debugging.
         Retries with RPC reconnect on failure."""
         for attempt in range(3):
             try:
                 nft_count = self.nft_manager.functions.balanceOf(self.address).call()
                 if nft_count == 0:
+                    print(f"[ARB-LP:{self.label}] No NFT positions found in wallet")
                     return
-                print(f"[ARB-LP:{self.label}] Found {nft_count} existing NFT position(s), checking...")
+                print(f"[ARB-LP:{self.label}] Found {nft_count} NFT position(s), scanning ALL...")
                 for i in range(nft_count):
                     token_id = self.nft_manager.functions.tokenOfOwnerByIndex(self.address, i).call()
                     pos = self.nft_manager.functions.positions(token_id).call()
                     liquidity = pos[7]
-                    if liquidity > 0:
-                        token0 = pos[2]
-                        token1 = pos[3]
-                        fee = pos[4]
+                    token0 = pos[2]
+                    token1 = pos[3]
+                    fee = pos[4]
+                    t0_name = self._addr_to_token_name(token0) or "UNKNOWN"
+                    t1_name = self._addr_to_token_name(token1) or "UNKNOWN"
+                    symbol = f"{t0_name}-{t1_name}"
+                    print(f"[ARB-LP:{self.label}]   Position #{token_id}: {symbol} fee={fee} liquidity={liquidity}")
+
+                    if liquidity > 0 and not self.active_position:
                         pool_addr = self.factory.functions.getPool(
                             Web3.to_checksum_address(token0),
                             Web3.to_checksum_address(token1),
                             fee,
                         ).call()
-                        t0_name = self._addr_to_token_name(token0) or "UNKNOWN"
-                        t1_name = self._addr_to_token_name(token1) or "UNKNOWN"
-                        symbol = f"{t0_name}-{t1_name}"
                         self.active_position = {
                             "token_id": token_id,
                             "pool": {"symbol": symbol, "apy": 0, "tvl": 0, "fee": fee},
@@ -1153,9 +1157,11 @@ class ArbitrumLPManager:
                             "token1": token1,
                             "entry_time": time.time(),
                         }
-                        print(f"[ARB-LP:{self.label}] Recovered position #{token_id} ({symbol} fee={fee}, liquidity={liquidity})")
-                        return
-                return  # No positions with liquidity
+                        print(f"[ARB-LP:{self.label}]   -> RECOVERED as active position")
+
+                if not self.active_position:
+                    print(f"[ARB-LP:{self.label}] No positions with liquidity > 0")
+                return
             except Exception as e:
                 print(f"[ARB-LP:{self.label}] Recovery attempt {attempt+1}/3 failed: {e}")
                 if attempt < 2:
@@ -1181,20 +1187,23 @@ class ArbitrumLPManager:
                 current_parts = set(current_symbol.upper().replace("/", "-").split("-"))
 
                 if current_parts and current_parts != target_parts:
-                    print(f"[ARB-LP:{self.label}] Current pool {current_symbol} != target {target_pool}")
-                    print(f"[ARB-LP:{self.label}] DISMANTLING old position to migrate to {target_pool}...")
+                    print(f"[ARB-LP:{self.label}] *** POOL MIGRATION ***")
+                    print(f"[ARB-LP:{self.label}] Current: {current_symbol} ({current_parts})")
+                    print(f"[ARB-LP:{self.label}] Target:  {target_pool} ({target_parts})")
+                    print(f"[ARB-LP:{self.label}] DISMANTLING old position to migrate...")
                     token_id = self.active_position.get("token_id")
                     if token_id:
-                        # Collect any pending fees first
+                        # Remove all liquidity (decreaseLiquidity + collect)
+                        # Skip fee compound — we want tokens in wallet, not back in old position
                         try:
-                            self._collect_fees(token_id)
+                            self._remove_liquidity(token_id)
+                            print(f"[ARB-LP:{self.label}] Old position #{token_id} dismantled successfully")
                         except Exception as e:
-                            print(f"[ARB-LP:{self.label}] Fee collection before migration failed: {e}")
-                        # Remove all liquidity
-                        self._remove_liquidity(token_id)
+                            print(f"[ARB-LP:{self.label}] ERROR dismantling position #{token_id}: {e}")
+                            # Force clear state anyway so next cycle retries
                     self.active_position = None
                     self._oor_since = None
-                    print(f"[ARB-LP:{self.label}] Old position dismantled, proceeding to mount {target_pool}")
+                    print(f"[ARB-LP:{self.label}] State cleared, will mount {target_pool} now")
 
             # 1. Check gas availability
             eth_balance = self._get_eth_balance()
