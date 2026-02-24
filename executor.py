@@ -170,8 +170,22 @@ class HyperliquidExecutor:
             print(f"[EXECUTOR] Error setting leverage for {coin}: {e}")
             return None
 
-    def open_position(self, coin: str, is_long: bool, size_usd: float) -> dict:
-        """Open a market position."""
+    def open_position(self, coin: str, is_long: bool, size_usd: float,
+                      sl_pct: float = None, tp_pct: float = None) -> dict:
+        """Open a market position.
+
+        Args:
+            coin: Trading pair
+            is_long: True for LONG, False for SHORT
+            size_usd: Position size in USD
+            sl_pct: Stop loss percentage (decimal, e.g. 0.02 = 2%). Uses config default if None.
+            tp_pct: Take profit percentage (decimal). Uses config default if None.
+        """
+        if sl_pct is None:
+            sl_pct = config.STOP_LOSS_PCT
+        if tp_pct is None:
+            tp_pct = config.TAKE_PROFIT_PCT
+
         try:
             price = self.get_mid_price(coin)
             if price <= 0:
@@ -212,8 +226,12 @@ class HyperliquidExecutor:
                     "size": sz,
                     "entry_price": price,
                     "open_time": time.time(),
-                    "sl": price * (1 - config.STOP_LOSS_PCT) if is_long else price * (1 + config.STOP_LOSS_PCT),
-                    "tp": price * (1 + config.TAKE_PROFIT_PCT) if is_long else price * (1 - config.TAKE_PROFIT_PCT),
+                    "sl_pct": sl_pct,
+                    "tp_pct": tp_pct,
+                    "sl": price * (1 - sl_pct) if is_long else price * (1 + sl_pct),
+                    "tp": price * (1 + tp_pct) if is_long else price * (1 - tp_pct),
+                    "highest_price": price if is_long else None,
+                    "lowest_price": price if not is_long else None,
                 }
 
                 print(f"[EXECUTOR] OPENED {'LONG' if is_long else 'SHORT'} {coin} | "
@@ -243,36 +261,63 @@ class HyperliquidExecutor:
             return {"status": "error", "msg": str(e)}
 
     def check_sl_tp(self) -> list:
-        """Check if any position hit SL or TP. Returns list of coins to close."""
+        """Check if any position hit SL or TP. Returns list of coins to close.
+
+        Trailing stop only activates after position is at least 50% of the way to TP.
+        This prevents being stopped out by normal market noise.
+        """
         to_close = []
         for coin, pos in list(self.positions.items()):
             price = self.get_mid_price(coin)
             if price <= 0:
                 continue
 
+            entry = pos["entry_price"]
+            sl_pct = pos.get("sl_pct", config.STOP_LOSS_PCT)
+            tp_pct = pos.get("tp_pct", config.TAKE_PROFIT_PCT)
+
             if pos["side"] == "LONG":
                 if price <= pos["sl"]:
-                    print(f"[SL HIT] {coin} LONG | Entry: {pos['entry_price']:.2f} | Current: {price:.2f}")
+                    print(f"[SL HIT] {coin} LONG | Entry: {entry:.2f} | SL: {pos['sl']:.2f} | Current: {price:.2f}")
                     to_close.append(coin)
                 elif price >= pos["tp"]:
-                    print(f"[TP HIT] {coin} LONG | Entry: {pos['entry_price']:.2f} | Current: {price:.2f}")
+                    print(f"[TP HIT] {coin} LONG | Entry: {entry:.2f} | TP: {pos['tp']:.2f} | Current: {price:.2f}")
                     to_close.append(coin)
                 else:
-                    # Trailing stop: move SL up if price moved favorably
-                    new_sl = price * (1 - config.TRAILING_STOP_PCT)
-                    if new_sl > pos["sl"]:
-                        pos["sl"] = new_sl
+                    # Track highest price seen
+                    highest = pos.get("highest_price", entry)
+                    if price > highest:
+                        pos["highest_price"] = price
+                        highest = price
+
+                    # Trailing stop: only activate after reaching 50% of TP distance
+                    tp_distance = entry * tp_pct
+                    profit_so_far = highest - entry
+                    if profit_so_far >= tp_distance * 0.5:
+                        # Trail using the position's own SL percentage
+                        trail_sl = highest * (1 - sl_pct)
+                        if trail_sl > pos["sl"]:
+                            pos["sl"] = trail_sl
             else:  # SHORT
                 if price >= pos["sl"]:
-                    print(f"[SL HIT] {coin} SHORT | Entry: {pos['entry_price']:.2f} | Current: {price:.2f}")
+                    print(f"[SL HIT] {coin} SHORT | Entry: {entry:.2f} | SL: {pos['sl']:.2f} | Current: {price:.2f}")
                     to_close.append(coin)
                 elif price <= pos["tp"]:
-                    print(f"[TP HIT] {coin} SHORT | Entry: {pos['entry_price']:.2f} | Current: {price:.2f}")
+                    print(f"[TP HIT] {coin} SHORT | Entry: {entry:.2f} | TP: {pos['tp']:.2f} | Current: {price:.2f}")
                     to_close.append(coin)
                 else:
-                    # Trailing stop: move SL down
-                    new_sl = price * (1 + config.TRAILING_STOP_PCT)
-                    if new_sl < pos["sl"]:
-                        pos["sl"] = new_sl
+                    # Track lowest price seen
+                    lowest = pos.get("lowest_price", entry)
+                    if price < lowest:
+                        pos["lowest_price"] = price
+                        lowest = price
+
+                    # Trailing stop: only activate after reaching 50% of TP distance
+                    tp_distance = entry * tp_pct
+                    profit_so_far = entry - lowest
+                    if profit_so_far >= tp_distance * 0.5:
+                        trail_sl = lowest * (1 + sl_pct)
+                        if trail_sl < pos["sl"]:
+                            pos["sl"] = trail_sl
 
         return to_close

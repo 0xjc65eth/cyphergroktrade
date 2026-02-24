@@ -548,17 +548,37 @@ class SMCEngine:
         if total == 0:
             return "NEUTRAL", 0, "No SMC signals detected"
 
+        # BUG 9 FIX: Reject contradictory signals
+        # If both bull and bear have significant scores, it's a conflict zone
+        if bull_score > 0 and bear_score > 0:
+            # Only proceed if one side is CLEARLY dominant (>= 2x the other)
+            dominant = max(bull_score, bear_score)
+            minor = min(bull_score, bear_score)
+            if dominant < minor * 2.0:
+                return "NEUTRAL", 0.1, f"Contradictory signals (bull:{bull_score} vs bear:{bear_score}) | " + " | ".join(details)
+
+        # Minimum confluence: 1 factor with decent score, or 2+ factors
+        # Agressivo: single strong signal (score >= 4) is enough
+        if bull_score > bear_score and confluence_count["bull"] < 1:
+            return "NEUTRAL", 0, "No bull factors | " + " | ".join(details)
+        if bear_score > bull_score and confluence_count["bear"] < 1:
+            return "NEUTRAL", 0, "No bear factors | " + " | ".join(details)
+
         # Signal with confidence scaling
-        # 1 factor = lower confidence, 2+ factors = higher confidence (bonus)
         if bull_score > bear_score:
             confidence = min(bull_score / 10.0, 1.0)
-            if confluence_count["bull"] >= 2:
-                confidence = min(confidence * 1.3, 1.0)  # Bonus for confluence
+            # Bonus for multi-factor confluence
+            if confluence_count["bull"] >= 3:
+                confidence = min(confidence * 1.25, 1.0)
+            elif confluence_count["bull"] >= 2:
+                confidence = min(confidence * 1.1, 1.0)
             return "LONG", confidence, " | ".join(details)
         elif bear_score > bull_score:
             confidence = min(bear_score / 10.0, 1.0)
-            if confluence_count["bear"] >= 2:
-                confidence = min(confidence * 1.3, 1.0)
+            if confluence_count["bear"] >= 3:
+                confidence = min(confidence * 1.25, 1.0)
+            elif confluence_count["bear"] >= 2:
+                confidence = min(confidence * 1.1, 1.0)
             return "SHORT", confidence, " | ".join(details)
         else:
-            return "NEUTRAL", 0.2, " | ".join(details)
+            return "NEUTRAL", 0.1, " | ".join(details)

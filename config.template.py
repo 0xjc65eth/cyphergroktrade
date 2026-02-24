@@ -1,6 +1,7 @@
 """
-CypherGrokTrade - Configuration Template
+CypherGrokTrade - Configuration Template v3 (Aggressive-Safe Strategy)
 Copy to config.py and fill in your secrets, OR set environment variables for cloud deploy.
+Optimized for high win-rate SMC confluence setups + MM fallback.
 """
 
 import os
@@ -11,7 +12,7 @@ HL_WALLET_ADDRESS = os.environ.get("HL_WALLET_ADDRESS", "")
 
 # === Profit Withdrawal ===
 WITHDRAW_WALLET = os.environ.get("WITHDRAW_WALLET", "")
-WITHDRAW_EVERY_USD = 10.0
+WITHDRAW_EVERY_USD = 10.0       # Send profit every $10 gained
 
 # === Telegram Notifications ===
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -23,73 +24,78 @@ GROK_MODEL = os.environ.get("GROK_MODEL", "grok-4-1-fast-non-reasoning")
 GROK_API_URL = "https://api.x.ai/v1/chat/completions"
 
 # === Trading Parameters ===
-INITIAL_CAPITAL = 6.0
-TARGET_CAPITAL = 50000.0
-LEVERAGE = 10
-LEVERAGE_MAP = {"BTC": 10, "ETH": 10, "SOL": 8}
-MAX_RISK_PER_TRADE = 0.10
+INITIAL_CAPITAL = 6.0             # USD starting capital
+TARGET_CAPITAL = 50000.0          # USD target
+LEVERAGE = 15                     # Agressivo: 15x default
+LEVERAGE_MAP = {"BTC": 10, "ETH": 10, "SOL": 12}
+MAX_RISK_PER_TRADE = 0.08        # 8% risk per trade - agressivo mas controlado
+MAX_ENTRIES_PER_CYCLE = 2         # Max 2 entries per scan cycle
+MIN_SECONDS_BETWEEN_ENTRIES = 30  # 30s entre entries (rapido mas nao spam)
 
-# === SL/TP ===
-STOP_LOSS_PCT = 0.020
-TAKE_PROFIT_PCT = 0.045
-TRAILING_STOP_PCT = 0.012
-USE_ATR_STOPS = True
-ATR_SL_MULTIPLIER = 2.5
-ATR_TP_MULTIPLIER = 5.0
+# === SL/TP (ATR-based dynamic is primary, these are fallbacks) ===
+STOP_LOSS_PCT = 0.020            # 2.0% SL - tight para limitar perdas
+TAKE_PROFIT_PCT = 0.045          # 4.5% TP (2.25:1 R:R)
+TRAILING_STOP_PCT = 0.012        # 1.2% trailing (ativa apos 50% do TP)
+USE_ATR_STOPS = True             # Use ATR for dynamic SL/TP
+ATR_SL_MULTIPLIER = 2.5          # SL = 2.5 * ATR
+ATR_TP_MULTIPLIER = 5.5          # TP = 5.5 * ATR (2.2:1 R:R minimum)
 
 # === Trading Pairs ===
-TRADING_PAIRS = []
-TOP_COINS_COUNT = 200
-MIN_VOLUME_24H = 50_000
+TRADING_PAIRS = []                # Empty = dynamic
+TOP_COINS_COUNT = 200             # Scan ALL coins da Hyperliquid (~191 ativas)
+MIN_VOLUME_24H = 50_000           # Baixo para incluir mais coins no scan
 LEVERAGE_MAP_DEFAULT = 15
 
+# === Extra Pairs (sempre incluidos no scan) ===
 EXTRA_PAIRS = ["PAXG", "SPX"]
-LEVERAGE_MAP.update({"PAXG": 15, "SPX": 15})
+LEVERAGE_MAP.update({"PAXG": 10, "SPX": 10})
 
-# === SMC Parameters ===
-SMC_LOOKBACK = 100
-ORDER_BLOCK_THRESHOLD = 0.0015
+# === SMC Parameters (premium setup detection) ===
+SMC_LOOKBACK = 100               # More data for better swing detection
+ORDER_BLOCK_THRESHOLD = 0.0015   # Slightly higher for premium OBs
 FVG_MIN_GAP = 0.0003
 BOS_CONFIRMATION_CANDLES = 3
-DISPLACEMENT_MIN = 0.003
-MIN_CONFLUENCE_FACTORS = 2
+DISPLACEMENT_MIN = 0.003         # Min 0.3% for displacement candle
+MIN_CONFLUENCE_FACTORS = 2       # Require at least 2 SMC factors to agree
 
 # === Moving Average Parameters ===
-EMA_FAST = 8
+EMA_FAST = 8                     # Slightly faster for crypto
 EMA_SLOW = 21
-EMA_TREND = 55
+EMA_TREND = 55                   # 55 better than 50 for crypto
 RSI_PERIOD = 14
 RSI_OVERBOUGHT = 65
 RSI_OVERSOLD = 35
 
-# === Timeframes ===
-SCALP_TIMEFRAME = "1m"
-TREND_TIMEFRAME = "5m"
-HTF_TIMEFRAME = "15m"
+# === Timeframes (multi-timeframe analysis) ===
+SCALP_TIMEFRAME = "1m"           # Entry timeframe
+TREND_TIMEFRAME = "5m"           # Trend confirmation
+HTF_TIMEFRAME = "15m"            # Higher timeframe bias
 
 # === Risk Management ===
-MAX_DAILY_LOSS_PCT = 999.0
-MAX_CONSECUTIVE_LOSSES = 3
-COOLDOWN_SECONDS = 180
-MAX_OPEN_POSITIONS = 5
-SCAN_INTERVAL = 15
+MAX_DAILY_LOSS_PCT = 25.0         # 25% max daily loss - agressivo mas com trava
+MAX_CONSECUTIVE_LOSSES = 3        # 3 losses = cooldown
+COOLDOWN_SECONDS = 180            # 3 min cooldown (rapido para voltar)
+MAX_OPEN_POSITIONS = 3            # 3 posicoes simultaneas
+SCAN_INTERVAL = 20                # 20s entre scans - rapido para pegar moves
 
-TRADING_HOURS_ENABLED = False
+# === Horario Operacional ===
+TRADING_HOURS_ENABLED = False     # DESATIVADO - opera 24h
 
 # === Signal Quality Filters ===
-MIN_CONFIDENCE = 0.65
-REQUIRE_5M_TREND = True
-REQUIRE_15M_BIAS = True
-MIN_VOLUME_RATIO = 1.2
-REQUIRE_OB_OR_FVG = True
-REQUIRE_STRUCTURE = False
+MIN_CONFIDENCE = 0.65             # Confianca minima (agressivo mas filtrado)
+REQUIRE_5M_TREND = True           # Filtro 5m: exige alinhamento OU high-conf bypass
+HIGH_CONF_5M_BYPASS = 0.80       # Se conf >= 0.80, aceita 5m NEUTRAL (momentum forte)
+REQUIRE_15M_BIAS = True           # Aceita NEUTRAL, mas rejeita oposicao
+MIN_VOLUME_RATIO = 1.3            # Volume acima da media
+REQUIRE_OB_OR_FVG = True          # Precisa ter zona de entry definida
+REQUIRE_STRUCTURE = False          # Bonus, nao obrigatorio (mais entries)
 
-# === MM Fallback ===
-MM_FALLBACK_ENABLED = True
-MM_FALLBACK_AFTER_SCANS = 2
-MM_AGGRESSIVE_ON_IDLE = True
+# === MM Fallback (when no futures signals) ===
+MM_FALLBACK_ENABLED = True        # Auto-switch to MM when no signals
+MM_FALLBACK_AFTER_SCANS = 2       # After 2 full scans with no entry, do MM
+MM_AGGRESSIVE_ON_IDLE = True      # Place more MM orders when futures idle
 
-# === Spot Market Making ===
+# === Spot Market Making (Bid/Ask) ===
 MM_ENABLED = True
 MM_PAIRS = ["PURR/USDC", "@107"]
 MM_SPREAD_BPS = 10
@@ -98,24 +104,30 @@ MM_SIZE_USD = 11.0
 MM_MIN_BALANCE = 1.0
 MM_ALLOC_PCT = 0.30
 MM_REFRESH_INTERVAL = 30
-MM_DYNAMIC_SPREAD = True
-MM_MIN_SPREAD_BPS = 3
-MM_MAX_SPREAD_BPS = 50
-MM_INVENTORY_REBALANCE = True
+# Dynamic spread adjustment
+MM_DYNAMIC_SPREAD = True          # Widen spread in volatility, tighten in calm
+MM_MIN_SPREAD_BPS = 3             # Never go below 3 bps
+MM_MAX_SPREAD_BPS = 50            # Never go above 50 bps
+MM_INVENTORY_REBALANCE = True     # Skew orders to rebalance inventory
 
-# === Arbitrum LP ===
+# === Arbitrum LP (DEX Liquidity Provision) ===
 ARB_LP_ENABLED = True
 ARB_RPC_URL = "https://arb1.arbitrum.io/rpc"
 ARB_RPC_FALLBACK = "https://arbitrum.llamarpc.com"
-ARB_LP_ALLOC_USD = 5.00
-ARB_LP_REFRESH_INTERVAL = 60
-ARB_LP_MIN_APY = 5.0
-ARB_LP_PREFER_STABLES = False
-ARB_LP_TARGET_POOL = "WETH-USDC"           # Pool alvo fixa (bypassa DeFiLlama scoring)
-ARB_LP_MAX_GAS_PCT = 0.10
-ARB_LP_REBALANCE_AFTER_OOR_MIN = 30
-ARB_LP_FEE_COLLECT_MIN_USD = 0.02
-ARB_LP_COPY_FEE_PCT = 0.05
+ARB_LP_ALLOC_USD = 5.00               # Max USD to deploy as LP (~50% of capital)
+ARB_LP_REFRESH_INTERVAL = 60           # Check position every 1 min (faster migration/rebalance)
+ARB_LP_MIN_APY = 5.0                   # Minimum 5% APY to enter pool
+ARB_LP_PREFER_STABLES = False          # Degen mode: go for highest APY pools
+ARB_LP_TARGET_POOL = "WETH-USDC"       # Pool alvo fixa (bypassa DeFiLlama scoring)
+ARB_LP_MAX_GAS_PCT = 0.10              # Never spend >10% of position on gas per tx
+ARB_LP_REBALANCE_AFTER_OOR_MIN = 30    # Rebalance after 30 min out of range
+ARB_LP_FEE_COLLECT_MIN_USD = 0.02      # Min fees to justify collection tx
+ARB_LP_COPY_FEE_PCT = 0.05             # 5% fee on follower LP allocation (paid to master)
+
+# === Copy Trading Allocation (follower capital split) ===
+COPY_ALLOC_LP_PCT = 0.50              # 50% of follower capital -> Arbitrum LP
+COPY_ALLOC_SCALP_PCT = 0.25           # 25% of follower capital -> Perp scalp trading
+COPY_ALLOC_MM_PCT = 0.25              # 25% of follower capital -> Spot MM bid/ask
 ARB_CHAIN_ID = 42161
 ARB_TOKENS = {
     # Blue chips

@@ -81,6 +81,8 @@ class CypherGrokTradeBot:
         self.last_withdraw_check = 0
         self.total_withdrawn = 0.0
         self.idle_scans = 0  # Track scans with no futures entry
+        self.last_entry_time = 0  # Cooldown between entries (BUG 5 fix)
+        self.entries_this_cycle = 0  # Max entries per scan cycle
 
     def banner(self):
         print(f"""
@@ -99,12 +101,22 @@ class CypherGrokTradeBot:
 """)
 
     def _get_5m_trend(self, coin: str) -> str:
-        """Get the 5-minute trend direction using EMA alignment."""
+        """Get the 5-minute trend direction using EMA alignment.
+
+        Returns LONG/SHORT only when there is CLEAR directional bias.
+        Requires EMA alignment + RSI not in neutral zone.
+        """
         df_5m = self.executor.get_candles(coin, "5m", 60)
         if df_5m.empty or len(df_5m) < 55:
             return "NEUTRAL"
         ma_result = self.ma.analyze(df_5m)
-        return ma_result["signal"]
+        sig = ma_result["signal"]
+
+        # Only confirm trend if confidence is reasonable
+        if ma_result["confidence"] < 0.3:
+            return "NEUTRAL"
+
+        return sig
 
     def _get_15m_bias(self, coin: str) -> str:
         """Get the 15-minute bias using SMC structure."""
@@ -116,17 +128,36 @@ class CypherGrokTradeBot:
         smc_result = self.smc.analyze(df_15m)
         return smc_result["signal"]
 
-    def _get_atr_levels(self, ma_result: dict, current_price: float) -> tuple:
+    def _get_atr_levels(self, ma_result: dict, current_price: float, df_1m=None) -> tuple:
         """Calculate ATR-based SL/TP levels.
 
         Returns (sl_pct, tp_pct) as decimals.
+        BUG 8 FIX: Fallback to manual ATR calculation if ma_result ATR is NaN/0.
         """
+        import pandas as pd
+
         if not config.USE_ATR_STOPS:
             return config.STOP_LOSS_PCT, config.TAKE_PROFIT_PCT
 
         atr_pct = ma_result.get("atr_pct", 0)
-        if atr_pct and atr_pct > 0:
-            sl_pct = max(atr_pct * config.ATR_SL_MULTIPLIER, 0.015)  # Min 1.5% SL (era 0.5%)
+
+        # Check for NaN or zero
+        if not atr_pct or (isinstance(atr_pct, float) and (pd.isna(atr_pct) or atr_pct <= 0)):
+            # Try manual ATR calculation from raw candles
+            if df_1m is not None and len(df_1m) >= 15:
+                try:
+                    hl = df_1m["high"] - df_1m["low"]
+                    hc = (df_1m["high"] - df_1m["close"].shift(1)).abs()
+                    lc = (df_1m["low"] - df_1m["close"].shift(1)).abs()
+                    tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+                    atr = tr.rolling(14).mean().iloc[-1]
+                    if pd.notna(atr) and current_price > 0:
+                        atr_pct = atr / current_price
+                except Exception:
+                    pass
+
+        if atr_pct and isinstance(atr_pct, (int, float)) and not pd.isna(atr_pct) and atr_pct > 0:
+            sl_pct = max(atr_pct * config.ATR_SL_MULTIPLIER, 0.015)  # Min 1.5% SL
             tp_pct = max(atr_pct * config.ATR_TP_MULTIPLIER, sl_pct * 2.0)  # Min 2:1 R:R
 
             # Cap at reasonable levels
@@ -360,30 +391,52 @@ class CypherGrokTradeBot:
                 # Check SL/TP
                 coins_to_close = self.executor.check_sl_tp()
                 for coin in coins_to_close:
+                    # BUG 6 FIX: Determine WIN/LOSS from position data, not balance diff
+                    # Balance diff is unreliable when multiple positions are open
+                    pos_data = self.executor.positions.get(coin, {})
+                    exit_price = self.executor.get_mid_price(coin)
+                    entry_price = pos_data.get("entry_price", 0)
+                    is_long = pos_data.get("side") == "LONG"
+
                     result = self.executor.close_position(coin)
                     if result["status"] == "ok":
                         self.trades_taken += 1
-                        new_balance = self.executor.get_balance()
-                        if new_balance > balance:
+
+                        # Calculate PnL from entry/exit prices
+                        if entry_price > 0 and exit_price > 0:
+                            if is_long:
+                                pnl_pct = (exit_price - entry_price) / entry_price
+                            else:
+                                pnl_pct = (entry_price - exit_price) / entry_price
+                            size = pos_data.get("size", 0)
+                            pnl_usd = pnl_pct * size * entry_price
+                            is_win = pnl_pct > 0
+                        else:
+                            # Fallback to balance diff
+                            new_balance = self.executor.get_balance()
+                            pnl_usd = new_balance - balance
+                            is_win = pnl_usd > 0
+
+                        if is_win:
                             self.wins += 1
                             self.consecutive_losses = 0
-                            gain = new_balance - balance
-                            print(f"  {C.GREEN}[WIN] {coin} +${gain:.4f}{C.RESET}")
-                            self.telegram.trade_closed(coin, "WIN", gain, True)
-                            self.logger.log_trade_close(coin, self.executor.get_mid_price(coin), gain, True)
+                            print(f"  {C.GREEN}[WIN] {coin} +${abs(pnl_usd):.4f} "
+                                  f"(entry: {entry_price:.2f} -> exit: {exit_price:.2f}){C.RESET}")
+                            self.telegram.trade_closed(coin, "WIN", abs(pnl_usd), True)
+                            self.logger.log_trade_close(coin, exit_price, abs(pnl_usd), True)
                         else:
                             self.losses += 1
                             self.consecutive_losses += 1
-                            loss = balance - new_balance
-                            print(f"  {C.RED}[LOSS] {coin} -${loss:.4f}{C.RESET}")
-                            self.telegram.trade_closed(coin, "LOSS", -loss, False)
-                            self.logger.log_trade_close(coin, self.executor.get_mid_price(coin), -loss, False)
+                            print(f"  {C.RED}[LOSS] {coin} -${abs(pnl_usd):.4f} "
+                                  f"(entry: {entry_price:.2f} -> exit: {exit_price:.2f}){C.RESET}")
+                            self.telegram.trade_closed(coin, "LOSS", -abs(pnl_usd), False)
+                            self.logger.log_trade_close(coin, exit_price, -abs(pnl_usd), False)
 
                             if self.consecutive_losses >= config.MAX_CONSECUTIVE_LOSSES:
                                 self.cooldown_until = now + timedelta(seconds=config.COOLDOWN_SECONDS)
                                 print(f"  {C.YELLOW}[COOLDOWN] {self.consecutive_losses} losses. "
                                       f"Pausing {config.COOLDOWN_SECONDS}s{C.RESET}")
-                        balance = new_balance
+                        balance = self.executor.get_balance()
 
                 # Check open positions
                 open_positions = self.executor.get_open_positions()
@@ -413,6 +466,7 @@ class CypherGrokTradeBot:
 
                 # Scan for new trades
                 found_entry = False
+                self.entries_this_cycle = 0  # Reset per-cycle entry counter
                 for coin in scan_coins:
                     if not self.running:
                         break
@@ -470,18 +524,28 @@ class CypherGrokTradeBot:
                     if smc_sig != "NEUTRAL" and ma_sig != "NEUTRAL" and smc_sig != ma_sig:
                         continue
                     # Use the non-neutral signal
-                    signal = smc_sig if smc_sig != "NEUTRAL" else ma_sig
+                    trade_direction = smc_sig if smc_sig != "NEUTRAL" else ma_sig
                     # Override for downstream filters
-                    smc_sig = signal
+                    smc_sig = trade_direction
 
-                    # FILTER 2: 5m trend must agree (or be neutral)
-                    if config.REQUIRE_5M_TREND and trend_5m != "NEUTRAL" and trend_5m != smc_sig:
-                        print(f"    {C.YELLOW}[SKIP] 5m trend ({trend_5m}) opposes signal ({smc_sig}){C.RESET}")
-                        continue
+                    # FILTER 2: 5m trend alignment
+                    # BUG 3 FIX: Now requires alignment, but HIGH confidence can bypass NEUTRAL
+                    if config.REQUIRE_5M_TREND:
+                        high_conf_bypass = getattr(config, 'HIGH_CONF_5M_BYPASS', 0.80)
+                        if trend_5m == "NEUTRAL":
+                            # Allow bypass if BOTH engines agree with high confidence
+                            if avg_conf >= high_conf_bypass and smc_result["signal"] == ma_result["signal"] and smc_result["signal"] != "NEUTRAL":
+                                print(f"    {C.CYAN}[BYPASS] 5m NEUTRAL but high conf ({avg_conf:.2f} >= {high_conf_bypass}) + engines agree{C.RESET}")
+                            else:
+                                print(f"    {C.YELLOW}[SKIP] 5m trend NEUTRAL - need trend or high conf{C.RESET}")
+                                continue
+                        elif trend_5m != trade_direction:
+                            print(f"    {C.YELLOW}[SKIP] 5m trend ({trend_5m}) opposes signal ({trade_direction}){C.RESET}")
+                            continue
 
-                    # FILTER 3: 15m bias must agree (or be neutral)
-                    if config.REQUIRE_15M_BIAS and bias_15m != "NEUTRAL" and bias_15m != smc_sig:
-                        print(f"    {C.YELLOW}[SKIP] 15m bias ({bias_15m}) opposes signal ({smc_sig}){C.RESET}")
+                    # FILTER 3: 15m bias must agree (or be neutral - HTF neutral is ok)
+                    if config.REQUIRE_15M_BIAS and bias_15m != "NEUTRAL" and bias_15m != trade_direction:
+                        print(f"    {C.YELLOW}[SKIP] 15m bias ({bias_15m}) opposes signal ({trade_direction}){C.RESET}")
                         continue
 
                     # FILTER 4: Minimum confidence (use max of the two)
@@ -555,12 +619,27 @@ class CypherGrokTradeBot:
                         continue
 
                     # === CALCULATE ATR-BASED SL/TP ===
-                    sl_pct, tp_pct = self._get_atr_levels(ma_result, price)
+                    sl_pct, tp_pct = self._get_atr_levels(ma_result, price, df_1m)
+
+                    # === RATE LIMIT: Max 1 entry per cycle, min 30s between entries ===
+                    # BUG 5 FIX: Previously opened 5+ positions in rapid succession
+                    now_ts = time.time()
+                    if self.entries_this_cycle >= config.MAX_ENTRIES_PER_CYCLE:
+                        print(f"    {C.YELLOW}[SKIP] Max entries this cycle ({config.MAX_ENTRIES_PER_CYCLE}){C.RESET}")
+                        continue
+                    if now_ts - self.last_entry_time < config.MIN_SECONDS_BETWEEN_ENTRIES:
+                        print(f"    {C.YELLOW}[SKIP] Too soon since last entry ({now_ts - self.last_entry_time:.0f}s < {config.MIN_SECONDS_BETWEEN_ENTRIES}s){C.RESET}")
+                        continue
 
                     # === EXECUTE ===
                     leverage = config.LEVERAGE_MAP.get(coin, config.LEVERAGE_MAP_DEFAULT)
-                    size_usd = balance * config.MAX_RISK_PER_TRADE * leverage
-                    # Cap at 50% of balance * leverage
+
+                    # BUG 4 FIX: Position sizing - risk based on SL distance, not flat %
+                    # Risk amount = what we're willing to lose if SL is hit
+                    risk_amount = balance * config.MAX_RISK_PER_TRADE  # e.g. 8% of $6 = $0.48
+                    # Size = risk / SL% so that if SL hits, we lose exactly risk_amount
+                    size_usd = risk_amount / sl_pct if sl_pct > 0 else risk_amount * leverage
+                    # Cap at 50% of balance * leverage (max exposure per trade)
                     size_usd = min(size_usd, balance * 0.50 * leverage)
                     # Minimo $11 para Hyperliquid
                     size_usd = max(size_usd, 11.0)
@@ -584,23 +663,17 @@ class CypherGrokTradeBot:
                         grok_decision.get("reason", ""),
                     )
 
-                    # Override executor SL/TP with ATR-based levels
-                    original_sl = config.STOP_LOSS_PCT
-                    original_tp = config.TAKE_PROFIT_PCT
-                    config.STOP_LOSS_PCT = sl_pct
-                    config.TAKE_PROFIT_PCT = tp_pct
-
-                    result = self.executor.open_position(coin, is_long, size_usd)
-
-                    # Restore
-                    config.STOP_LOSS_PCT = original_sl
-                    config.TAKE_PROFIT_PCT = original_tp
+                    # BUG 1 FIX: Pass SL/TP directly to executor instead of mutating config
+                    result = self.executor.open_position(coin, is_long, size_usd,
+                                                         sl_pct=sl_pct, tp_pct=tp_pct)
 
                     if result["status"] == "ok":
                         self.trades_taken += 1
                         coins_with_positions.add(coin)
                         found_entry = True
                         self.idle_scans = 0
+                        self.last_entry_time = time.time()
+                        self.entries_this_cycle += 1
                         self.telegram.trade_opened(coin, action, size_usd, result['price'], leverage)
                         # LOG: trade opened
                         self.logger.log_trade_open(
@@ -614,7 +687,7 @@ class CypherGrokTradeBot:
                     else:
                         print(f"    {C.RED}[FAIL] {result.get('msg', '')}{C.RESET}")
 
-                    time.sleep(2)
+                    time.sleep(5)  # Increased from 2s to 5s between entries
 
                 # === MM FALLBACK: When no futures entries found ===
                 if not found_entry:

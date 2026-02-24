@@ -40,52 +40,48 @@ class GrokAI:
         for m in smc_analysis.get("mss", []):
             mss_info += f"\n  - {m['type']} at {m['level']:.2f} (displacement: {m.get('displacement')})"
 
-        prompt = f"""You are CypherTradeAI v4, an elite crypto trader. You are HIGHLY SELECTIVE.
-Our historical win rate is only 20% - we MUST improve by being more selective.
-ONLY approve trades with STRONG confluence. When in doubt, SKIP.
+        # Detect contradictions in the SMC data
+        has_bull_signals = any(x for x in [ob_info, fvg_info, sweep_info, mss_info]
+                              if "BULLISH" in x)
+        has_bear_signals = any(x for x in [ob_info, fvg_info, sweep_info, mss_info]
+                              if "BEARISH" in x)
+        contradiction_warning = ""
+        if has_bull_signals and has_bear_signals:
+            contradiction_warning = "\nWARNING: Mixed bullish AND bearish signals detected. This is a CONTRADICTION - you should SKIP."
 
-COIN: {coin}
-PRICE: ${current_price:.2f}
-BALANCE: ${balance:.2f}
-5M TREND: {trend_5m}
-15M BIAS: {bias_15m}
+        prompt = f"""You are a crypto trade evaluator. Be selective but not overly cautious.
+We need to make $3/day with aggressive but smart entries. Approve good setups, reject trash.
 
-=== SMC (1m) ===
-Signal: {smc_analysis['signal']} (conf: {smc_analysis['confidence']:.2f})
-Trend: {smc_analysis.get('trend', 'N/A')}
+COIN: {coin} | PRICE: ${current_price:.2f} | BAL: ${balance:.2f}
+5M TREND: {trend_5m} | 15M BIAS: {bias_15m}
+{contradiction_warning}
+
+SMC: {smc_analysis['signal']} (conf: {smc_analysis['confidence']:.2f}) | Trend: {smc_analysis.get('trend', 'N/A')}
 Details: {smc_details}
-Order Blocks: {ob_info or 'None'}
-FVGs: {fvg_info or 'None'}
-Sweeps: {sweep_info or 'None'}
-MSS: {mss_info or 'None'}
+OBs: {ob_info or 'None'} | FVGs: {fvg_info or 'None'}
+Sweeps: {sweep_info or 'None'} | MSS: {mss_info or 'None'}
 
-=== MA (1m) ===
-Signal: {ma_analysis['signal']} (conf: {ma_analysis['confidence']:.2f})
-RSI: {ma_analysis.get('rsi', 'N/A')}
-Volume: {ma_analysis.get('vol_ratio', 'N/A')}x avg
-Details: {ma_analysis.get('details', 'N/A')}
+MA: {ma_analysis['signal']} (conf: {ma_analysis['confidence']:.2f})
+RSI: {ma_analysis.get('rsi', 'N/A')} | Vol: {ma_analysis.get('vol_ratio', 'N/A')}x avg
 
-=== MANDATORY SKIP CONDITIONS ===
-1. 5M trend opposes signal
-2. 15M bias opposes signal
-3. RSI > 70 for LONG or RSI < 30 for SHORT
-4. SMC confidence < 0.5 AND MA confidence < 0.5
-5. No Order Block AND no FVG near price
-6. Volume ratio < 1.0 (below average volume)
-7. Both SMC and MA signals do not agree on direction
+=== HARD SKIP (any one = SKIP) ===
+1. RSI > 72 for LONG or RSI < 28 for SHORT (chasing extremes)
+2. SMC and MA disagree on direction (one LONG, other SHORT)
+3. Mixed bullish AND bearish SMC signals (contradiction)
+4. SMC confidence < 0.5 AND MA confidence < 0.5 (no signal)
+5. 5M trend OPPOSES signal direction
 
-=== APPROVE ONLY IF ALL TRUE ===
-- SMC AND MA agree on direction (both LONG or both SHORT, or one agrees and other neutral)
-- 5M trend agrees or is neutral
-- 15M bias agrees or is neutral
-- At least one OB or FVG supports the entry
+=== APPROVE IF ===
+- Engines agree (or one strong + other neutral)
+- At least 1 OB or FVG supports the entry
 - Confidence >= 0.6 from at least one engine
-- Volume is above average
+- No contradictory signals
+- Volume reasonable (>1.0x avg)
 
-Be SELECTIVE. Fewer trades, higher quality. SKIP is ALWAYS the safer choice.
-It is MUCH better to miss a good trade than to take a bad one.
+Give higher confidence (0.8+) when: confirmed sweep + OB, MSS with displacement, or 3+ factors align.
+Give moderate confidence (0.65-0.79) when: 2 factors agree with trend.
 
-Respond ONLY JSON:
+Respond ONLY with valid JSON:
 {{"action": "LONG" or "SHORT" or "SKIP", "confidence": 0.0-1.0, "reason": "brief reason"}}"""
 
         try:
@@ -97,7 +93,7 @@ Respond ONLY JSON:
                 },
                 json={
                     "messages": [
-                        {"role": "system", "content": "You are an elite crypto trade filter. You are HIGHLY SELECTIVE. Our win rate has been terrible (20%). Only approve HIGH PROBABILITY setups with multiple confirmations. When in doubt, ALWAYS SKIP. Quality over quantity. Respond only with valid JSON."},
+                        {"role": "system", "content": "You are a crypto trade evaluator. Approve GOOD setups with confluence, reject obvious trash. We need 40%+ win rate with 2:1 R:R. Be selective but not scared - missing good setups is also costly. When engines agree with OB/FVG support, approve confidently. Respond only with valid JSON."},
                         {"role": "user", "content": prompt},
                     ],
                     "model": self.model,
@@ -128,7 +124,7 @@ Respond ONLY JSON:
 
             print(f"[GROK] Decision: {action} | Confidence: {conf} | Reason: {reason}")
 
-            # Extra safety: reject low confidence (RAISED from 0.5 to 0.65)
+            # Extra safety: reject low confidence
             if action != "SKIP" and conf < 0.65:
                 print(f"[GROK] Overriding to SKIP (confidence {conf} < 0.65)")
                 return {"action": "SKIP", "confidence": conf, "reason": f"Low Grok confidence: {reason}"}
