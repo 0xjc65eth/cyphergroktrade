@@ -64,6 +64,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_dashboard()
         elif self.path == "/api/status":
             self._serve_api()
+        elif self.path == "/api/trades":
+            self._serve_trades()
+        elif self.path == "/api/signals":
+            self._serve_signals()
+        elif self.path == "/api/config":
+            self._serve_config()
+        elif self.path == "/api/pnl":
+            self._serve_pnl()
+        elif self.path == "/api/learning":
+            self._serve_learning()
         elif self.path == "/health":
             self._serve_health()
         else:
@@ -183,6 +193,132 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 data["api_error"] = str(e)
 
         self.wfile.write(json.dumps(data).encode())
+
+    def _json_response(self, data):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, default=str).encode())
+
+    def _serve_trades(self):
+        """Return trade history from trades_history.json."""
+        trades = []
+        try:
+            trades_path = os.path.join(os.path.dirname(__file__), "trades_history.json")
+            if os.path.exists(trades_path):
+                with open(trades_path, "r") as f:
+                    trades = json.load(f)
+        except Exception as e:
+            trades = [{"error": str(e)}]
+        self._json_response(trades)
+
+    def _serve_signals(self):
+        """Return signal history from signals_history.json."""
+        signals = []
+        try:
+            signals_path = os.path.join(os.path.dirname(__file__), "signals_history.json")
+            if os.path.exists(signals_path):
+                with open(signals_path, "r") as f:
+                    signals = json.load(f)
+        except Exception as e:
+            signals = [{"error": str(e)}]
+        self._json_response(signals)
+
+    def _serve_config(self):
+        """Return full config as JSON."""
+        try:
+            import config
+            cfg = {}
+            for key in dir(config):
+                if key.isupper() and not key.startswith("_"):
+                    val = getattr(config, key)
+                    if isinstance(val, (str, int, float, bool, list, dict, type(None))):
+                        # Hide secrets
+                        if any(s in key for s in ["KEY", "TOKEN", "SECRET", "PASSWORD", "WALLET", "PRIVATE"]):
+                            cfg[key] = "***HIDDEN***"
+                        else:
+                            cfg[key] = val
+            self._json_response(cfg)
+        except Exception as e:
+            self._json_response({"error": str(e)})
+
+    def _serve_pnl(self):
+        """Return accumulated PnL data with daily/hourly breakdown."""
+        result = {"total_pnl": 0, "daily": {}, "hourly": {}, "by_coin": {}, "cumulative": []}
+        try:
+            trades_path = os.path.join(os.path.dirname(__file__), "trades_history.json")
+            if os.path.exists(trades_path):
+                with open(trades_path, "r") as f:
+                    trades = json.load(f)
+
+                running_pnl = 0
+                for t in trades:
+                    pnl = t.get("pnl")
+                    if pnl is None:
+                        continue
+                    running_pnl += pnl
+                    result["cumulative"].append({
+                        "ts": t.get("timestamp_close", t.get("timestamp_open")),
+                        "pnl": round(pnl, 4),
+                        "cumulative": round(running_pnl, 4),
+                        "coin": t.get("coin"),
+                        "result": t.get("result"),
+                    })
+
+                    # Daily breakdown
+                    day = (t.get("timestamp_close") or t.get("timestamp_open", ""))[:10]
+                    if day:
+                        if day not in result["daily"]:
+                            result["daily"][day] = {"pnl": 0, "wins": 0, "losses": 0, "trades": 0}
+                        result["daily"][day]["pnl"] = round(result["daily"][day]["pnl"] + pnl, 4)
+                        result["daily"][day]["trades"] += 1
+                        if t.get("result") == "WIN":
+                            result["daily"][day]["wins"] += 1
+                        elif t.get("result") == "LOSS":
+                            result["daily"][day]["losses"] += 1
+
+                    # Hourly breakdown
+                    hour = str(t.get("hour_open", "?"))
+                    if hour not in result["hourly"]:
+                        result["hourly"][hour] = {"pnl": 0, "wins": 0, "losses": 0, "trades": 0}
+                    result["hourly"][hour]["pnl"] = round(result["hourly"][hour]["pnl"] + pnl, 4)
+                    result["hourly"][hour]["trades"] += 1
+                    if t.get("result") == "WIN":
+                        result["hourly"][hour]["wins"] += 1
+                    elif t.get("result") == "LOSS":
+                        result["hourly"][hour]["losses"] += 1
+
+                    # By coin
+                    coin = t.get("coin", "?")
+                    if coin not in result["by_coin"]:
+                        result["by_coin"][coin] = {"pnl": 0, "wins": 0, "losses": 0, "trades": 0}
+                    result["by_coin"][coin]["pnl"] = round(result["by_coin"][coin]["pnl"] + pnl, 4)
+                    result["by_coin"][coin]["trades"] += 1
+                    if t.get("result") == "WIN":
+                        result["by_coin"][coin]["wins"] += 1
+                    elif t.get("result") == "LOSS":
+                        result["by_coin"][coin]["losses"] += 1
+
+                result["total_pnl"] = round(running_pnl, 4)
+
+        except Exception as e:
+            result["error"] = str(e)
+
+        self._json_response(result)
+
+    def _serve_learning(self):
+        """Return learning stats."""
+        try:
+            stats_path = os.path.join(os.path.dirname(__file__), "learning_stats.json")
+            if os.path.exists(stats_path):
+                with open(stats_path, "r") as f:
+                    stats = json.load(f)
+                self._json_response(stats)
+            else:
+                self._json_response({"message": "No learning data yet"})
+        except Exception as e:
+            self._json_response({"error": str(e)})
 
     def _serve_health(self):
         self.send_response(200)
