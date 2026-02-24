@@ -376,13 +376,14 @@ class TelegramNotifier:
                 f"*Getting Started:*\n"
                 f"  1. Create a Hyperliquid account\n"
                 f"  2. Deposit USDC\n"
-                f"  3. Export your Private Key\n"
-                f"  4. Send here:\n"
-                f"     `/follow YourName YourPrivateKey`\n"
+                f"  3. Export your API Private Key (Settings)\n"
+                f"  4. Copy your wallet address (top right)\n"
+                f"  5. Send here:\n"
+                f"     `/follow Name ApiKey WalletAddress`\n"
                 f"\n"
                 f"{DIVIDER}\n"
                 f"*Commands*\n"
-                f"  /follow `name` `key` — Start copying\n"
+                f"  /follow `name` `key` `wallet` — Start copying\n"
                 f"  /my\\_status — View your positions\n"
                 f"  /stop\\_copy — Stop copying\n"
                 f"\n"
@@ -391,23 +392,42 @@ class TelegramNotifier:
             )
 
         elif cmd in ("/follow", "/add_follower", "/addfollower"):
-            if len(parts) < 3:
+            if len(parts) < 4:
                 self._send_to(chat_id,
-                    f"*Usage:* `/follow YourName YourPrivateKey`\n"
+                    f"*Usage:* `/follow Name ApiKey WalletAddress`\n"
                     f"\n"
-                    f"Example:\n"
-                    f"  `/follow John 0xYourPrivateKey123...`\n"
+                    f"*Steps:*\n"
+                    f"  1. Go to app.hyperliquid.xyz\n"
+                    f"  2. Settings > Export API Private Key\n"
+                    f"  3. Copy your wallet address (top right)\n"
                     f"\n"
-                    f"Optional risk multiplier:\n"
-                    f"  `/follow John 0xKey 0.5` (half risk)\n"
-                    f"  `/follow John 0xKey 2.0` (double risk)"
+                    f"*Example:*\n"
+                    f"  `/follow John 0xApiKey... 0xWallet...`\n"
+                    f"\n"
+                    f"*Optional multiplier:*\n"
+                    f"  `/follow John 0xKey 0xWallet 0.5`\n"
+                    f"  `/follow John 0xKey 0xWallet 2.0`"
                     f"{SIGNATURE}"
                 )
                 return
 
             name = parts[1]
             key = parts[2]
-            mult = float(parts[3]) if len(parts) > 3 else 1.0
+            wallet_addr = parts[3]
+            mult = float(parts[4]) if len(parts) > 4 else 1.0
+
+            # Validate wallet address format
+            if not wallet_addr.startswith("0x") or len(wallet_addr) < 40:
+                self._send_to(chat_id,
+                    f"*Invalid wallet address*\n"
+                    f"\n"
+                    f"The 3rd parameter must be your Hyperliquid\n"
+                    f"wallet address (starts with 0x...).\n"
+                    f"\n"
+                    f"Find it at the top right of app.hyperliquid.xyz"
+                    f"{SIGNATURE}"
+                )
+                return
 
             if not self.copy_manager:
                 self._send_to(chat_id,
@@ -417,7 +437,8 @@ class TelegramNotifier:
                 )
                 return
 
-            result = self.copy_manager.add_follower(name, key, multiplier=mult)
+            result = self.copy_manager.add_follower(name, key, multiplier=mult,
+                                                     main_wallet=wallet_addr)
 
             if result.get("success"):
                 self._send_to(chat_id,

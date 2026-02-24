@@ -165,7 +165,13 @@ class FeeTracker:
         # Execute fee collection via USDC transfer to master
         try:
             account = Account.from_key(follower["private_key"])
-            exchange = Exchange(account, base_url="https://api.hyperliquid.xyz")
+            main_wallet = follower.get("main_wallet", follower.get("wallet_address", wallet))
+            api_wallet = follower.get("api_wallet", account.address)
+            if api_wallet.lower() != main_wallet.lower():
+                exchange = Exchange(account, base_url="https://api.hyperliquid.xyz",
+                                   account_address=main_wallet)
+            else:
+                exchange = Exchange(account, base_url="https://api.hyperliquid.xyz")
 
             # Hyperliquid internal transfer (USDC)
             result = exchange.usd_class_transfer(
@@ -298,15 +304,39 @@ class CopyTradingManager:
             json.dump(self.followers, f, indent=2)
 
     def add_follower(self, name: str, private_key: str, multiplier: float = 1.0,
-                     max_risk_pct: float = 0.10, max_positions: int = 10) -> dict:
+                     max_risk_pct: float = 0.10, max_positions: int = 10,
+                     main_wallet: str = None) -> dict:
+        """Add a new follower.
+
+        Args:
+            private_key: API private key exported from Hyperliquid Settings.
+            main_wallet: The follower's MAIN Hyperliquid wallet address (0x...).
+                         Required because the API key derives a DIFFERENT address
+                         than the main wallet where funds are held.
+                         If not provided, falls back to the address derived from
+                         the API key (which will show $0 if it's an API wallet).
+        """
         try:
             account = Account.from_key(private_key)
-            wallet_address = account.address
+            api_wallet = account.address
         except Exception as e:
             return {"error": f"Private key inválida: {e}"}
 
+        # Use main_wallet if provided, otherwise fall back to API key derived address
+        wallet_address = main_wallet if main_wallet else api_wallet
+
+        # Validate main_wallet format if provided
+        if main_wallet:
+            try:
+                from web3 import Web3
+                wallet_address = Web3.to_checksum_address(main_wallet)
+            except Exception:
+                # Accept as-is if web3 not available
+                wallet_address = main_wallet
+
         for f in self.followers:
-            if f["wallet_address"].lower() == wallet_address.lower():
+            check_addr = f.get("main_wallet", f["wallet_address"])
+            if check_addr.lower() == wallet_address.lower():
                 return {"error": "Follower já registrado!"}
 
         try:
@@ -315,10 +345,18 @@ class CopyTradingManager:
         except:
             balance = 0
 
+        # If balance is 0 and main_wallet was not provided, warn
+        if balance == 0 and not main_wallet:
+            print(f"[COPY] ⚠️ Balance $0 for {name}. API key address: {api_wallet[:12]}...")
+            print(f"[COPY] ⚠️ If follower has funds, they need to provide their MAIN wallet address.")
+            print(f"[COPY] ⚠️ Usage: /follow Name ApiKey WalletAddress [multiplier]")
+
         follower = {
             "name": name,
             "private_key": private_key,
-            "wallet_address": wallet_address,
+            "wallet_address": wallet_address,  # Main wallet (for balance queries)
+            "api_wallet": api_wallet,           # API key derived address (for signing)
+            "main_wallet": wallet_address,      # Explicit main wallet reference
             "multiplier": multiplier,
             "max_risk_pct": max_risk_pct,
             "max_positions": max_positions,
@@ -340,6 +378,7 @@ class CopyTradingManager:
         )
 
         print(f"[COPY] ✅ New follower: {name} | Balance: ${balance:.2f} | "
+              f"Main wallet: {wallet_address[:12]}... | API wallet: {api_wallet[:12]}... | "
               f"Fees: {PERFORMANCE_FEE_PCT*100:.0f}% perf + {TRADE_FEE_PCT*100:.1f}%/trade")
         return {"success": True, "wallet": wallet_address, "balance": balance}
 
@@ -378,7 +417,8 @@ class CopyTradingManager:
         result = []
         for f in self.followers:
             try:
-                user_state = self.info.user_state(f["wallet_address"])
+                query_addr = f.get("main_wallet", f["wallet_address"])
+                user_state = self.info.user_state(query_addr)
                 current_balance = float(user_state.get("marginSummary", {}).get("accountValue", 0))
                 positions = [p for p in user_state.get("assetPositions", [])
                              if float(p.get("position", {}).get("szi", 0)) != 0]
@@ -445,9 +485,17 @@ class CopyTradingManager:
 
         try:
             account = Account.from_key(follower["private_key"])
-            exchange = Exchange(account, base_url="https://api.hyperliquid.xyz")
+            main_wallet = follower.get("main_wallet", follower["wallet_address"])
+            api_wallet = follower.get("api_wallet", account.address)
 
-            user_state = self.info.user_state(follower["wallet_address"])
+            # If API key address differs from main wallet, pass account_address
+            if api_wallet.lower() != main_wallet.lower():
+                exchange = Exchange(account, base_url="https://api.hyperliquid.xyz",
+                                   account_address=main_wallet)
+            else:
+                exchange = Exchange(account, base_url="https://api.hyperliquid.xyz")
+
+            user_state = self.info.user_state(main_wallet)
             follower_balance = float(user_state.get("marginSummary", {}).get("accountValue", 0))
 
             if follower_balance <= 0:
@@ -808,7 +856,8 @@ class CopyTradingManager:
 
         for f in active:
             try:
-                user_state = self.info.user_state(f["wallet_address"])
+                query_addr = f.get("main_wallet", f["wallet_address"])
+                user_state = self.info.user_state(query_addr)
                 bal = float(user_state.get("marginSummary", {}).get("accountValue", 0))
                 total_follower_balance += bal
                 total_follower_pnl += bal - f.get("balance_at_join", 0)
