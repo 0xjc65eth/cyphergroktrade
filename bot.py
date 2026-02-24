@@ -528,6 +528,9 @@ class CypherGrokTradeBot:
                     # Override for downstream filters
                     smc_sig = trade_direction
 
+                    # Compute avg_conf early (max of both engines) for use in all filters
+                    avg_conf = max(smc_conf, ma_conf)
+
                     # FILTER 2: 5m trend alignment
                     # BUG 3 FIX: Now requires alignment, but HIGH confidence can bypass NEUTRAL
                     if config.REQUIRE_5M_TREND:
@@ -548,8 +551,7 @@ class CypherGrokTradeBot:
                         print(f"    {C.YELLOW}[SKIP] 15m bias ({bias_15m}) opposes signal ({trade_direction}){C.RESET}")
                         continue
 
-                    # FILTER 4: Minimum confidence (use max of the two)
-                    avg_conf = max(smc_conf, ma_conf)
+                    # FILTER 4: Minimum confidence
                     if avg_conf < config.MIN_CONFIDENCE:
                         print(f"    {C.YELLOW}[SKIP] Low confidence ({avg_conf:.2f} < {config.MIN_CONFIDENCE}){C.RESET}")
                         continue
