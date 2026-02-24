@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py .
 COPY dashboard.html .
 COPY render.yaml .
+COPY *.json .
 RUN if [ ! -f config.py ]; then cp config.template.py config.py; fi
 
 # Expose health check port (Render uses PORT env var)
