@@ -283,8 +283,14 @@ function printTable(headers, rows) {
 
 // ====== API FETCHERS ======
 async function fetchJSON(url) {
-    const r = await fetch(url);
-    return r.json();
+    try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+    } catch(e) {
+        print(`<span class="red">Fetch error (${url}): ${e.message}</span>`);
+        return null;
+    }
 }
 
 async function refreshStatus() {
@@ -337,6 +343,7 @@ const COMMANDS = {
                 ['logs',      'Recent scan logs'],
                 ['lp',        'Arbitrum LP status'],
                 ['copy',      'Copy trading followers'],
+                ['refresh',   'Force refresh all data from server'],
                 ['clear',     'Clear terminal'],
                 ['help',      'This help message'],
             ];
@@ -396,9 +403,13 @@ const COMMANDS = {
     trades: {
         desc: 'Trade history',
         run: async (args) => {
-            if (!cachedTrades) cachedTrades = await fetchJSON('/api/trades');
+            cachedTrades = await fetchJSON('/api/trades');
             const trades = cachedTrades;
-            if (!trades || trades.length === 0) { print('<span class="dim">No trades yet.</span>'); return; }
+            if (!trades || !Array.isArray(trades) || trades.length === 0) {
+                print('<span class="yellow">No trades recorded yet. Bot is scanning for high-quality setups...</span>');
+                print('<span class="dim">Trades will appear here once the bot opens and closes positions.</span>');
+                return;
+            }
 
             const completed = trades.filter(t => t.result);
             const limit = args === 'all' ? completed.length : 20;
@@ -442,8 +453,9 @@ const COMMANDS = {
     pnl: {
         desc: 'PnL analysis',
         run: async (args) => {
-            if (!cachedPnl) cachedPnl = await fetchJSON('/api/pnl');
+            cachedPnl = await fetchJSON('/api/pnl');
             const d = cachedPnl;
+            if (!d) { print('<span class="red">Cannot fetch PnL data.</span>'); return; }
             if (d.error) { print(`<span class="red">Error: ${d.error}</span>`); return; }
 
             if (args === 'daily') {
@@ -536,9 +548,12 @@ const COMMANDS = {
     signals: {
         desc: 'Recent signals',
         run: async () => {
-            if (!cachedSignals) cachedSignals = await fetchJSON('/api/signals');
+            cachedSignals = await fetchJSON('/api/signals');
             const sigs = cachedSignals;
-            if (!sigs || sigs.length === 0) { print('<span class="dim">No signals yet.</span>'); return; }
+            if (!sigs || !Array.isArray(sigs) || sigs.length === 0) {
+                print('<span class="yellow">No signals recorded yet. Bot is scanning markets...</span>');
+                return;
+            }
             const show = sigs.slice(-20);
             print(`<span class="cyan bold">--- RECENT SIGNALS (${show.length}/${sigs.length}) ---</span>`);
             const rows = show.map(s => {
@@ -563,8 +578,9 @@ const COMMANDS = {
     config: {
         desc: 'Full config',
         run: async () => {
-            if (!cachedConfig) cachedConfig = await fetchJSON('/api/config');
+            cachedConfig = await fetchJSON('/api/config');
             const cfg = cachedConfig;
+            if (!cfg) { print('<span class="red">Cannot fetch config.</span>'); return; }
             if (cfg.error) { print(`<span class="red">Error: ${cfg.error}</span>`); return; }
             print('<span class="cyan bold">--- CONFIGURATION ---</span>');
             const keys = Object.keys(cfg).sort();
@@ -582,8 +598,9 @@ const COMMANDS = {
     learning: {
         desc: 'Learning stats',
         run: async () => {
-            if (!cachedLearning) cachedLearning = await fetchJSON('/api/learning');
+            cachedLearning = await fetchJSON('/api/learning');
             const d = cachedLearning;
+            if (!d) { print('<span class="red">Cannot fetch learning data.</span>'); return; }
             if (d.error || d.message) {
                 print(`<span class="dim">${d.message || d.error}</span>`);
                 return;
@@ -665,13 +682,30 @@ const COMMANDS = {
         desc: 'LP status',
         run: async () => {
             await refreshStatus();
-            const lp = cachedStatus?.lp;
-            if (!lp) { print('<span class="dim">No LP data.</span>'); return; }
+            const lp = cachedStatus ? cachedStatus.lp : null;
+            if (!lp) { print('<span class="dim">No LP data available.</span>'); return; }
             print('<span class="purple bold">--- ARBITRUM LP ---</span>');
-            print(`  Active:  <span class="${lp.active?'green':'red'}">${lp.active?'YES':'NO'}</span>`);
-            print(`  Pool:    <span class="cyan">${lp.pool||'--'}</span>`);
-            print(`  TokenID: <span class="yellow">${lp.token_id ? '#'+lp.token_id : '--'}</span>`);
-            print(`  Fees:    <span class="green">$${(lp.fees_collected||0).toFixed(4)}</span>`);
+            print(`  Enabled:     <span class="${lp.enabled?'green':'red'}">${lp.enabled?'YES':'NO'}</span>`);
+            print(`  Active:      <span class="${lp.active?'green':'red'}">${lp.active?'YES':'NO'}</span>`);
+            print(`  Pool:        <span class="cyan">${lp.pool||'--'}</span>`);
+            print(`  Token ID:    <span class="yellow">${lp.token_id ? '#'+lp.token_id : '--'}</span>`);
+            print(`  Fees:        <span class="green">$${(lp.fees_collected||0).toFixed(4)}</span>`);
+            // Diagnostics
+            if (lp.address) print(`  Wallet:      <span class="dim">${lp.address}</span>`);
+            if (lp.eth_balance !== undefined) {
+                const ethOk = lp.eth_balance > 0.0001;
+                print(`  ETH Balance: <span class="${ethOk?'green':'red'}">${lp.eth_balance} ETH</span>`);
+                if (!ethOk) {
+                    print('');
+                    print('  <span class="red bold">LP INATIVA: Sem ETH no Arbitrum para gas!</span>');
+                    print('  <span class="yellow">Solucao: envie ~0.001 ETH para o wallet acima na rede Arbitrum.</span>');
+                }
+            }
+            if (lp.rpc_connected !== undefined) {
+                print(`  RPC:         <span class="${lp.rpc_connected?'green':'red'}">${lp.rpc_connected?'Connected':'Disconnected'}</span>`);
+            }
+            if (lp.diag_error) print(`  Diag Error:  <span class="red">${lp.diag_error}</span>`);
+            if (lp.reason) print(`  Reason:      <span class="yellow">${lp.reason}</span>`);
         }
     },
 
@@ -696,6 +730,16 @@ const COMMANDS = {
                 `<span class="yellow">$${(f.pending_fees||0).toFixed(4)}</span>`,
             ]);
             printTable(['Name','Wallet','Balance','LP Pool','Pending Fees'], rows);
+        }
+    },
+
+    refresh: {
+        desc: 'Force refresh all data',
+        run: async () => {
+            cachedTrades = null; cachedPnl = null; cachedSignals = null;
+            cachedConfig = null; cachedLearning = null;
+            await refreshStatus();
+            print('<span class="green">All caches cleared and status refreshed.</span>');
         }
     },
 
@@ -774,10 +818,14 @@ async function boot() {
     ];
     for (const [text, cls] of lines) {
         print(text, cls);
-        await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
+        await new Promise(r => setTimeout(r, 120 + Math.random() * 150));
     }
     // Auto-run status
-    await COMMANDS.status.run();
+    try {
+        await COMMANDS.status.run();
+    } catch(e) {
+        print(`<span class="red">Boot status error: ${e.message}</span>`);
+    }
     print('');
     print('<span class="dim">Type <span class="cyan">help</span> for commands | Auto-refresh every 10s</span>');
     print('');

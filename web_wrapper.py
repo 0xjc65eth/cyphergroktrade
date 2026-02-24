@@ -30,7 +30,8 @@ def _capturing_print(*args, **kwargs):
     _original_print(*args, **kwargs)
     # Capture bot scan/trade lines
     if any(tag in msg for tag in ["[SCAN]", "[ENTRY]", "[WIN]", "[LOSS]", "[MM]", "[ARB-LP]",
-                                   "[HOLD]", "[COOLDOWN]", "[GROK]", "[Cycle", "[COPY]"]):
+                                   "[HOLD]", "[COOLDOWN]", "[GROK]", "[Cycle", "[COPY]",
+                                   "[ERROR]", "[SKIP]", "[BYPASS]", "[INIT]", "Error"]):
         # Strip ANSI codes
         import re
         clean = re.sub(r'\033\[[0-9;]*m', '', msg).strip()
@@ -138,18 +139,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "scan_interval": config.SCAN_INTERVAL,
                 }
 
-                # Arbitrum LP (master)
+                # Arbitrum LP (master) - with diagnostics
                 if bot.arb_lp:
                     lp = bot.arb_lp
                     pos = lp.active_position  # singular dict or None
-                    data["lp"] = {
+                    lp_data = {
                         "active": bool(pos),
+                        "enabled": True,
                         "pool": pos.get("pool", None) if pos else None,
                         "token_id": pos.get("token_id", None) if pos else None,
                         "fees_collected": getattr(lp, "total_fees_collected", 0),
                     }
+                    # Diagnostics
+                    try:
+                        lp_data["address"] = lp.address[:8] + "..." + lp.address[-4:] if hasattr(lp, 'address') else "?"
+                        eth_bal = lp.w3.eth.get_balance(lp.address) if hasattr(lp, 'w3') else 0
+                        lp_data["eth_balance"] = round(eth_bal / 1e18, 6)
+                        lp_data["rpc_connected"] = lp.w3.is_connected() if hasattr(lp, 'w3') else False
+                    except Exception as e:
+                        lp_data["diag_error"] = str(e)
+                    data["lp"] = lp_data
                 else:
-                    data["lp"] = {"active": False, "pool": None, "token_id": None, "fees_collected": 0}
+                    data["lp"] = {
+                        "active": False, "enabled": getattr(config, 'ARB_LP_ENABLED', False),
+                        "pool": None, "token_id": None, "fees_collected": 0,
+                        "reason": "ArbitrumLPManager not initialized"
+                    }
 
                 # Copy Trading
                 cm = bot.copy_manager
