@@ -721,10 +721,11 @@ class CopyTradingManager:
 
         # HL balance (perps + spot)
         hl_balance = 0.0
+        query_addr = follower.get("main_wallet", follower["wallet_address"])
         try:
-            user_state = self.info.user_state(follower["wallet_address"])
+            user_state = self.info.user_state(query_addr)
             hl_balance = float(user_state.get("marginSummary", {}).get("accountValue", 0))
-            spot_state = self.info.spot_user_state(follower["wallet_address"])
+            spot_state = self.info.spot_user_state(query_addr)
             for b in spot_state.get("balances", []):
                 if b["coin"] == "USDC":
                     hl_balance += float(b.get("total", 0))
