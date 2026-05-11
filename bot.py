@@ -92,7 +92,7 @@ class CypherGrokTradeBot:
  ██║      ╚████╔╝ ██████╔╝███████║█████╗  ██████╔╝
  ██║       ╚██╔╝  ██╔═══╝ ██╔══██║██╔══╝  ██╔══██╗
  ╚██████╗   ██║   ██║     ██║  ██║███████╗██║  ██║
-  ╚═════╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
+  ╚══════╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
  {C.MAGENTA}╔══════════════════════════════════════════════╗
  ║  GROK TRADE AI v3 - PREMIUM SMC STRATEGY     ║
  ║  Multi-TF Confluence + MM Fallback            ║
@@ -342,19 +342,24 @@ class CypherGrokTradeBot:
                     self._close_all_positions()
                     return
 
-                # Daily loss LIMIT (ATIVADO - para de abrir novas posicoes)
+                # Daily loss LIMIT (REMOVIDO - bot agora opera SEM LIMITE DIARIO 🔥)
                 if pnl < 0:
                     loss_pct = abs(pnl) / self.start_balance * 100 if self.start_balance > 0 else 0
-                    if loss_pct >= config.MAX_DAILY_LOSS_PCT:
-                        print(f"  {C.RED}[STOP] Daily loss limit atingido: {loss_pct:.1f}% >= {config.MAX_DAILY_LOSS_PCT}%{C.RESET}")
-                        print(f"  {C.YELLOW}[STOP] Bot pausado para novas entradas. Posicoes abertas serao gerenciadas.{C.RESET}")
-                        self.telegram.send(f"STOP: Limite diario de loss atingido ({loss_pct:.1f}%). Sem novas entradas.")
-                        # Only manage existing positions, don't open new ones
-                        if config.MM_FALLBACK_ENABLED:
-                            self._run_mm_cycle("daily-loss-limit")
-                        time.sleep(60)
-                        continue
-                    elif loss_pct > 10:
+                    
+                    # === LIMITE DE LOSS REMOVIDO POR SUA SOLICITACAO ===
+                    # O bot NÃO para mais por drawdown diario. Continua abrindo posições mesmo no vermelho.
+                    # if loss_pct >= config.MAX_DAILY_LOSS_PCT:
+                    #     print(f"  {C.RED}[STOP] Daily loss limit atingido: {loss_pct:.1f}% >= {config.MAX_DAILY_LOSS_PCT}%{C.RESET}")
+                    #     print(f"  {C.YELLOW}[STOP] Bot pausado para novas entradas. Posicoes abertas serao gerenciadas.{C.RESET}")
+                    #     self.telegram.send(f"STOP: Limite diario de loss atingido ({loss_pct:.1f}%). Sem novas entradas.")
+                    #     # Only manage existing positions, don't open new ones
+                    #     if config.MM_FALLBACK_ENABLED:
+                    #         self._run_mm_cycle("daily-loss-limit")
+                    #     time.sleep(60)
+                    #     continue
+                    # ===================================================
+                    
+                    if loss_pct > 10:
                         print(f"  {C.YELLOW}[WARN] Drawdown: {loss_pct:.1f}% - cuidado{C.RESET}")
 
                 # Trading hours filter
